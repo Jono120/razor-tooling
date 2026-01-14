@@ -1,35 +1,58 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
-
-using System.Linq;
+using System.Collections.Immutable;
 using Microsoft.AspNetCore.Razor.Language;
-using Moq;
+using Microsoft.AspNetCore.Razor.Test.Common;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.CodeAnalysis.Razor.Completion
+namespace Microsoft.CodeAnalysis.Razor.Completion;
+
+public class DefaultRazorCompletionFactsServiceTest(ITestOutputHelper testOutput) : ToolingTestBase(testOutput)
 {
-    public class DefaultRazorCompletionFactsServiceTest
+    [Fact]
+    public void GetDirectiveCompletionItems_AllProvidersCompletionItems()
     {
-        [Fact]
-        public void GetDirectiveCompletionItems_AllProvidersCompletionItems()
-        {
-            // Arrange
-            var syntaxTree = RazorSyntaxTree.Parse(TestRazorSourceDocument.Create());
-            var tagHelperDocumentContext = TagHelperDocumentContext.Create(prefix: null, Enumerable.Empty<TagHelperDescriptor>());
-            var completionItem1 = new RazorCompletionItem("displayText1", "insertText1", RazorCompletionItemKind.Directive);
-            var context = new RazorCompletionContext(0, null, syntaxTree, tagHelperDocumentContext);
-            var provider1 = Mock.Of<RazorCompletionItemProvider>(p => p.GetCompletionItems(context) == new[] { completionItem1 }, MockBehavior.Strict);
-            var completionItem2 = new RazorCompletionItem("displayText2", "insertText2", RazorCompletionItemKind.Directive);
-            var provider2 = Mock.Of<RazorCompletionItemProvider>(p => p.GetCompletionItems(context) == new[] { completionItem2 }, MockBehavior.Strict);
-            var completionFactsService = new DefaultRazorCompletionFactsService(new[] { provider1, provider2 });
+        // Arrange
+        var sourceDocument = RazorSourceDocument.Create("", RazorSourceDocumentProperties.Default);
+        var codeDocument = RazorCodeDocument.Create(sourceDocument);
+        var syntaxTree = RazorSyntaxTree.Parse(TestRazorSourceDocument.Create());
+        var tagHelperDocumentContext = TagHelperDocumentContext.GetOrCreate(tagHelpers: []);
 
-            // Act
-            var completionItems = completionFactsService.GetCompletionItems(context);
+        var completionItem1 = RazorCompletionItem.CreateDirective(
+            displayText: "displayText1",
+            insertText: "insertText1",
+            sortText: null,
+            descriptionInfo: null!,
+            commitCharacters: [],
+            isSnippet: false);
 
-            // Assert
-            Assert.Equal(new[] { completionItem1, completionItem2 }, completionItems);
-        }
+        var context = new RazorCompletionContext(codeDocument, AbsoluteIndex: 0, Owner: null, SyntaxTree: syntaxTree, TagHelperDocumentContext: tagHelperDocumentContext);
+        var provider1 = StrictMock.Of<IRazorCompletionItemProvider>(p =>
+            p.GetCompletionItems(context) == ImmutableArray.Create(completionItem1));
+
+        var completionItem2 = RazorCompletionItem.CreateDirective(
+            displayText: "displayText2",
+            insertText: "insertText2",
+            sortText: null,
+            descriptionInfo: null!,
+            commitCharacters: [],
+            isSnippet: false);
+
+        var provider2 = StrictMock.Of<IRazorCompletionItemProvider>(p =>
+            p.GetCompletionItems(context) == ImmutableArray.Create(completionItem2));
+
+        var completionFactsService = new TestRazorCompletionFactsProvider(provider1, provider2);
+
+        // Act
+        var completionItems = completionFactsService.GetCompletionItems(context);
+
+        // Assert
+        Assert.Equal<RazorCompletionItem>([completionItem1, completionItem2], completionItems);
     }
+
+    private sealed class TestRazorCompletionFactsProvider(
+        params ImmutableArray<IRazorCompletionItemProvider> providers)
+        : AbstractRazorCompletionFactsService(providers);
 }

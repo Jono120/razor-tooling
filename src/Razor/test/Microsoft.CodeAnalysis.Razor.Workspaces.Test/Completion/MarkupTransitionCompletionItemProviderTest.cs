@@ -1,136 +1,116 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
-
-using System;
 using Microsoft.AspNetCore.Razor.Language;
 using Microsoft.AspNetCore.Razor.Language.Extensions;
 using Microsoft.AspNetCore.Razor.Language.Legacy;
+using Microsoft.AspNetCore.Razor.Language.Syntax;
+using Microsoft.AspNetCore.Razor.Test.Common;
 using Xunit;
-using Microsoft.VisualStudio.Editor.Razor;
+using Xunit.Abstractions;
 
-namespace Microsoft.CodeAnalysis.Razor.Completion
+namespace Microsoft.CodeAnalysis.Razor.Completion;
+
+public class MarkupTransitionCompletionItemProviderTest(ITestOutputHelper testOutput) : ToolingTestBase(testOutput)
 {
-    public class MarkupTransitionCompletionItemProviderTest
+    private readonly MarkupTransitionCompletionItemProvider _provider = new();
+
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemInUnopenedMarkupContext()
     {
-        public MarkupTransitionCompletionItemProviderTest()
-        {
-            Provider = new MarkupTransitionCompletionItemProvider(new DefaultHtmlFactsService());
-        }
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("<div>$$");
 
-        private MarkupTransitionCompletionItemProvider Provider { get; }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemInUnopenedMarkupContext()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("<div>");
-            var absoluteIndex = 5;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Empty(completionItems);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemInSimpleMarkupContext()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("<div><$$");
 
-            // Assert
-            Assert.Empty(completionItems);
-        }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemInSimpleMarkupContext()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("<div><");
-            var absoluteIndex = 6;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Empty(completionItems);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemInNestedMarkupContext()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("<div><span><p></p><p><$$ </p></span></div>");
 
-            // Assert
-            Assert.Empty(completionItems);
-        }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemInNestedMarkupContext()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("<div><span><p></p><p>< </p></span></div>");
-            var absoluteIndex = 22;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Empty(completionItems);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInCodeBlockStartingTag()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@{<$$");
 
-            // Assert
-            Assert.Empty(completionItems);
-        }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInCodeBlockStartingTag()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@{<");
-            var absoluteIndex = 3;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInCodeBlockPartialCompletion()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@{<te$$");
 
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInCodeBlockPartialCompletion()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@{<te");
-            var absoluteIndex = 5;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInIfConditional()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@if (true) {<$$ }");
 
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInIfConditional()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@if (true) {< }");
-            var absoluteIndex = 13;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInFunctionDirective()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@functions {public string GetHello(){<$$ return \"pi\";}}", FunctionsDirective.Directive);
 
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInFunctionDirective()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@functions {public string GetHello(){< return \"pi\";}}", FunctionsDirective.Directive);
-            var absoluteIndex = 38;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
-
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
-
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemInExpression()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree(@"@{
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemInExpression()
+    {
+        // Arrange
+        var testCode = @"@{
     SomeFunctionAcceptingMethod(() =>
     {
         string foo = ""bar"";
@@ -139,222 +119,210 @@ namespace Microsoft.CodeAnalysis.Razor.Completion
 
 @SomeFunctionAcceptingMethod(() =>
 {
-    <
-})");
-            var absoluteIndex = 121 + (Environment.NewLine.Length * 9);
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+    <$$
+})";
+        var razorCompletionContext = CreateRazorCompletionContext(testCode);
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-            // Assert
-            Assert.Empty(completionItems);
-        }
+        // Assert
+        Assert.Empty(completionItems);
+    }
 
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemInSingleLineTransitions()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree(@"@{
-    @* @: Here's some Markup | <-- You shouldn't get a <text> tag completion here. *@
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemInSingleLineTransitions()
+    {
+        // Arrange
+        var testCode = @"@{
+    @* @: Here's some Markup $$| <-- You shouldn't get a <text> tag completion here. *@
     @: Here's some markup <
-}");
-            var absoluteIndex = 114 + (Environment.NewLine.Length * 2);
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+}";
+        var razorCompletionContext = CreateRazorCompletionContext(testCode);
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-            // Assert
-            Assert.Empty(completionItems);
-        }
+        // Assert
+        Assert.Empty(completionItems);
+    }
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInNestedCSharpBlock()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree(@"<div>
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemInNestedCSharpBlock()
+    {
+        // Arrange
+        var testCode = @"<div>
 @if (true)
 {
-  < @* Should get text completion here *@
+  <$$ @* Should get text completion here *@
 }
-</div>");
-            var absoluteIndex = 19 + (Environment.NewLine.Length * 3);
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+</div>";
+        var razorCompletionContext = CreateRazorCompletionContext(testCode);
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
 
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemInNestedMarkupBlock()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree(@"@if (true)
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemInNestedMarkupBlock()
+    {
+        // Arrange
+        var testCode = @"@if (true)
 {
 <div>
-  < @* Shouldn't get text completion here *@
+  <$$ @* Shouldn't get text completion here *@
 </div>
-}");
-            var absoluteIndex = 19 + (Environment.NewLine.Length * 3);
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+}";
+        var razorCompletionContext = CreateRazorCompletionContext(testCode);
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-            // Assert
-            Assert.Empty(completionItems);
-        }
+        // Assert
+        Assert.Empty(completionItems);
+    }
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemWithUnrelatedClosingAngleBracket()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree(@"@functions {
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemWithUnrelatedClosingAngleBracket()
+    {
+        // Arrange
+        var testCode = @"@functions {
     public void SomeOtherMethod()
     {
-        <
+        <$$
     }
 
     private bool _collapseNavMenu => true;
-}", FunctionsDirective.Directive);
-            var absoluteIndex = 59 + (Environment.NewLine.Length * 3);
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+}";
+        var razorCompletionContext = CreateRazorCompletionContext(testCode, FunctionsDirective.Directive);
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
 
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
 
-        [Fact]
-        public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemWithUnrelatedClosingTag()
+    [Fact]
+    public void GetCompletionItems_ReturnsMarkupTransitionCompletionItemWithUnrelatedClosingTag()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@{<$$></>");
+
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
+
+        // Assert
+        Assert.Collection(completionItems, AssertRazorCompletionItem);
+    }
+
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemWhenOwnerIsComplexExpression()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@DateTime.Now<$$");
+
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
+
+        // Assert
+        Assert.Empty(completionItems);
+    }
+
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemWhenOwnerIsExplicitExpression()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@(something)<$$");
+
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
+
+        // Assert
+        Assert.Empty(completionItems);
+    }
+
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemWithSpaceAfterStartTag()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@{< $$");
+
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
+
+        // Assert
+        Assert.Empty(completionItems);
+    }
+
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemWithSpaceAfterStartTagAndAttribute()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("@{< te$$=\"\"");
+
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
+
+        // Assert
+        Assert.Empty(completionItems);
+    }
+
+    [Fact]
+    public void GetCompletionItems_ReturnsEmptyCompletionItemWhenInsideAttributeArea()
+    {
+        // Arrange
+        var razorCompletionContext = CreateRazorCompletionContext("<p <$$ >");
+
+        // Act
+        var completionItems = _provider.GetCompletionItems(razorCompletionContext);
+
+        // Assert
+        Assert.Empty(completionItems);
+    }
+
+    private static void AssertRazorCompletionItem(RazorCompletionItem item)
+    {
+        Assert.Equal(SyntaxConstants.TextTagName, item.DisplayText);
+        Assert.Equal(SyntaxConstants.TextTagName, item.InsertText);
+        var completionDescription = Assert.IsType<MarkupTransitionCompletionDescription>(item.DescriptionInfo);
+        Assert.Equal(CodeAnalysisResources.MarkupTransition_Description, completionDescription.Description);
+    }
+
+    private static RazorCompletionContext CreateRazorCompletionContext(TestCode text, params DirectiveDescriptor[] directives)
+    {
+        var syntaxTree = CreateSyntaxTree(text, directives);
+        var absoluteIndex = text.Position;
+        var sourceDocument = RazorSourceDocument.Create("", RazorSourceDocumentProperties.Default);
+        var codeDocument = RazorCodeDocument.Create(sourceDocument);
+
+        var tagHelperDocumentContext = TagHelperDocumentContext.GetOrCreate(tagHelpers: []);
+
+        var owner = syntaxTree.Root.FindInnermostNode(absoluteIndex, includeWhitespace: true, walkMarkersBack: true);
+        owner = AbstractRazorCompletionFactsService.AdjustSyntaxNodeForWordBoundary(owner, absoluteIndex);
+        return new RazorCompletionContext(codeDocument, absoluteIndex, owner, syntaxTree, tagHelperDocumentContext);
+    }
+
+    private static RazorSyntaxTree CreateSyntaxTree(TestCode text, params DirectiveDescriptor[] directives)
+    {
+        return CreateSyntaxTree(text, RazorFileKind.Legacy, directives);
+    }
+
+    private static RazorSyntaxTree CreateSyntaxTree(TestCode text, RazorFileKind fileKind, params DirectiveDescriptor[] directives)
+    {
+        var sourceDocument = TestRazorSourceDocument.Create(text.Text);
+
+        var builder = new RazorParserOptions.Builder(RazorLanguageVersion.Latest, fileKind)
         {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@{<></>");
-            var absoluteIndex = 3;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
+            Directives = [.. directives]
+        };
 
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
+        var options = builder.ToOptions();
 
-            // Assert
-            Assert.Collection(completionItems, AssertRazorCompletionItem);
-        }
-
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemWhenOwnerIsComplexExpression()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@DateTime.Now<");
-            var absoluteIndex = 14;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
-
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
-
-            // Assert
-            Assert.Empty(completionItems);
-        }
-
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemWhenOwnerIsExplicitExpression()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@(something)<");
-            var absoluteIndex = 13;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
-
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
-
-            // Assert
-            Assert.Empty(completionItems);
-        }
-
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemWithSpaceAfterStartTag()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@{< ");
-            var absoluteIndex = 4;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
-
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
-
-            // Assert
-            Assert.Empty(completionItems);
-        }
-
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemWithSpaceAfterStartTagAndAttribute()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("@{< te=\"\"");
-            var absoluteIndex = 6;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
-
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
-
-            // Assert
-            Assert.Empty(completionItems);
-        }
-
-        [Fact]
-        public void GetCompletionItems_ReturnsEmptyCompletionItemWhenInsideAttributeArea()
-        {
-            // Arrange
-            var syntaxTree = CreateSyntaxTree("<p < >");
-            var absoluteIndex = 4;
-            var razorCompletionContext = CreateRazorCompletionContext(absoluteIndex, syntaxTree);
-
-            // Act
-            var completionItems = Provider.GetCompletionItems(razorCompletionContext);
-
-            // Assert
-            Assert.Empty(completionItems);
-        }
-
-        private static void AssertRazorCompletionItem(RazorCompletionItem item)
-        {
-            Assert.Equal(item.DisplayText, SyntaxConstants.TextTagName);
-            Assert.Equal(item.InsertText, SyntaxConstants.TextTagName);
-            var completionDescription = item.GetMarkupTransitionCompletionDescription();
-            Assert.Equal(CodeAnalysisResources.MarkupTransition_Description, completionDescription.Description);
-        }
-
-        private static RazorCompletionContext CreateRazorCompletionContext(int absoluteIndex, RazorSyntaxTree syntaxTree)
-        {
-            var tagHelperDocumentContext = TagHelperDocumentContext.Create(prefix: string.Empty, Array.Empty<TagHelperDescriptor>());
-
-            var queryableChange = new SourceChange(absoluteIndex, length: 0, newText: string.Empty);
-            var owner = syntaxTree.Root.LocateOwner(queryableChange);
-            return new RazorCompletionContext(absoluteIndex, owner, syntaxTree, tagHelperDocumentContext);
-        }
-
-        private static RazorSyntaxTree CreateSyntaxTree(string text, params DirectiveDescriptor[] directives)
-        {
-            return CreateSyntaxTree(text, FileKinds.Legacy, directives);
-        }
-
-        private static RazorSyntaxTree CreateSyntaxTree(string text, string fileKind, params DirectiveDescriptor[] directives)
-        {
-            var sourceDocument = TestRazorSourceDocument.Create(text);
-            var options = RazorParserOptions.Create(builder =>
-            {
-                foreach (var directive in directives)
-                {
-                    builder.Directives.Add(directive);
-                }
-            }, fileKind);
-            var syntaxTree = RazorSyntaxTree.Parse(sourceDocument, options);
-            return syntaxTree;
-        }
+        var syntaxTree = RazorSyntaxTree.Parse(sourceDocument, options);
+        return syntaxTree;
     }
 }

@@ -1,33 +1,16 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-using System;
 using Microsoft.AspNetCore.Razor.Language;
 
-namespace Microsoft.CodeAnalysis.Razor.Tooltip
+namespace Microsoft.CodeAnalysis.Razor.Tooltip;
+
+internal sealed record BoundElementDescriptionInfo(string TagHelperTypeName, string? Documentation = null)
 {
-    internal class BoundElementDescriptionInfo
+    public static BoundElementDescriptionInfo From(TagHelperDescriptor tagHelper)
     {
-        public BoundElementDescriptionInfo(string tagHelperTypeName, string documentation)
-        {
-            if (tagHelperTypeName is null)
-            {
-                throw new ArgumentNullException(nameof(tagHelperTypeName));
-            }
+        var tagHelperTypeName = tagHelper.TypeName;
 
-            TagHelperTypeName = tagHelperTypeName;
-            Documentation = documentation;
-        }
-
-        public string TagHelperTypeName { get; }
-
-        public string Documentation { get; }
-
-        public static BoundElementDescriptionInfo From(TagHelperDescriptor tagHelper)
-        {
-            var tagHelperTypeName = tagHelper.GetTypeName();
-            var descriptionInfo = new BoundElementDescriptionInfo(tagHelperTypeName, tagHelper.Documentation);
-            return descriptionInfo;
-        }
+        return new BoundElementDescriptionInfo(tagHelperTypeName, tagHelper.Documentation);
     }
 }

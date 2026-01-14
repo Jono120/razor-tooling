@@ -1,149 +1,214 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Razor;
+using Microsoft.CodeAnalysis.Razor.Logging;
 using Microsoft.Internal.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.Razor.IntegrationTests.InProcess;
 using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.VisualStudio.Razor.IntegrationTests
+namespace Microsoft.VisualStudio.Razor.IntegrationTests;
+
+[LogIntegrationTest]
+public abstract class AbstractRazorEditorTest(ITestOutputHelper testOutput) : AbstractIntegrationTest
 {
-    public abstract class AbstractRazorEditorTest : AbstractEditorTest
+    private readonly ITestOutputHelper _testOutput = testOutput;
+    private ILogger? _testLogger;
+    private string? _projectFilePath;
+
+    protected virtual bool ComponentClassificationExpected => true;
+
+    protected virtual string TargetFramework => "net8.0";
+
+    protected virtual string TargetFrameworkElement => $"""<TargetFramework>{TargetFramework}</TargetFramework>""";
+
+    protected virtual string ProjectZipFile => "Microsoft.VisualStudio.Razor.IntegrationTests.TestFiles.BlazorProject.zip";
+
+    private protected virtual ILogger Logger => _testLogger.AssumeNotNull();
+
+    protected string ProjectFilePath => _projectFilePath.AssumeNotNull();
+
+    public override async Task InitializeAsync()
     {
-        private const string LegacyRazorEditorFeatureFlag = "Razor.LSP.LegacyEditor";
-        private const string UseLegacyASPNETCoreEditorSetting = "TextEditor.HTML.Specific.UseLegacyASPNETCoreRazorEditor";
+        await base.InitializeAsync();
 
-        protected override string LanguageName => LanguageNames.Razor;
+        _testLogger = await TestServices.Output.SetupIntegrationTestLoggerAsync(_testOutput, ControlledHangMitigatingCancellationToken);
 
-        public override async Task InitializeAsync()
+        _testLogger.LogInformation($"#### Razor integration test initialize.");
+
+        VisualStudioLogging.AddCustomLoggers();
+
+        await TestServices.Shell.ResetEnvironmentAsync(ControlledHangMitigatingCancellationToken);
+
+        _projectFilePath = await CreateAndOpenBlazorProjectAsync(ControlledHangMitigatingCancellationToken);
+
+        await TestServices.SolutionExplorer.RestoreNuGetPackagesAsync(ControlledHangMitigatingCancellationToken);
+        await TestServices.Workspace.WaitForProjectSystemAsync(ControlledHangMitigatingCancellationToken);
+
+        await TestServices.RazorProjectSystem.WaitForProjectFileAsync(_projectFilePath, ControlledHangMitigatingCancellationToken);
+
+        var razorFilePath = await TestServices.SolutionExplorer.GetAbsolutePathForProjectRelativeFilePathAsync(RazorProjectConstants.BlazorProjectName, RazorProjectConstants.IndexRazorFile, ControlledHangMitigatingCancellationToken);
+        await TestServices.RazorProjectSystem.WaitForRazorFileInProjectAsync(_projectFilePath, razorFilePath, ControlledHangMitigatingCancellationToken);
+
+        // We open the Index.razor file, and wait for 3 RazorComponentElement's to be classified, as that
+        // way we know the LSP server is up, running, and has processed both local and library-sourced Components
+        await TestServices.SolutionExplorer.OpenFileAsync(RazorProjectConstants.BlazorProjectName, RazorProjectConstants.IndexRazorFile, ControlledHangMitigatingCancellationToken);
+
+        // Razor extension doesn't launch until a razor file is opened, so wait for it to equalize
+        await TestServices.Workspace.WaitForProjectSystemAsync(ControlledHangMitigatingCancellationToken);
+
+        EnsureLSPEditorEnabled();
+        await EnsureTextViewRolesAsync(ControlledHangMitigatingCancellationToken);
+        await EnsureExtensionInstalledAsync(ControlledHangMitigatingCancellationToken);
+
+        await TestServices.Editor.PlaceCaretAsync("</PageTitle>", charsOffset: 1, ControlledHangMitigatingCancellationToken);
+
+        if (ComponentClassificationExpected)
         {
-            await base.InitializeAsync();
-
-            VisualStudioLogging.AddCustomLoggers();
-
-            await TestServices.SolutionExplorer.CreateSolutionAsync("BlazorSolution", ControlledHangMitigatingCancellationToken);
-            await TestServices.SolutionExplorer.AddProjectAsync("BlazorProject", WellKnownProjectTemplates.BlazorProject, groupId: WellKnownProjectTemplates.GroupIdentifiers.Server, templateId: null, LanguageName, ControlledHangMitigatingCancellationToken);
-            await TestServices.SolutionExplorer.RestoreNuGetPackagesAsync(ControlledHangMitigatingCancellationToken);
-            await TestServices.Workspace.WaitForProjectSystemAsync(ControlledHangMitigatingCancellationToken);
-
-            await TestServices.Workspace.WaitForAsyncOperationsAsync(FeatureAttribute.LanguageServer, ControlledHangMitigatingCancellationToken);
-
-            // We open the Index.razor file, and wait for 3 RazorComponentElement's to be classified, as that
-            // way we know the LSP server is up, running, and has processed both local and library-sourced Components
-            await TestServices.SolutionExplorer.AddFileAsync(RazorProjectConstants.BlazorProjectName, RazorProjectConstants.ModifiedIndexRazorFile, RazorProjectConstants.IndexPageContent, open: true, ControlledHangMitigatingCancellationToken);
-
-            // Razor extension doesn't launch until a razor file is opened, so wait for it to equalize
-            await TestServices.Workspace.WaitForAsyncOperationsAsync(FeatureAttribute.LanguageServer, ControlledHangMitigatingCancellationToken);
-            await TestServices.Workspace.WaitForAsyncOperationsAsync(FeatureAttribute.Workspace, ControlledHangMitigatingCancellationToken);
-            await TestServices.Workspace.WaitForProjectSystemAsync(ControlledHangMitigatingCancellationToken);
-
-            EnsureLSPEditorEnabled();
-            await EnsureTextViewRolesAsync(ControlledHangMitigatingCancellationToken);
-            await EnsureExtensionInstalledAsync(ControlledHangMitigatingCancellationToken);
-            EnsureMEFCompositionSuccessForRazor();
-
             await TestServices.Editor.WaitForComponentClassificationAsync(ControlledHangMitigatingCancellationToken, count: 3);
-
-            // Close the file we opened, just in case, so the test can start with a clean slate
-            await TestServices.Editor.CloseDocumentWindowAsync(ControlledHangMitigatingCancellationToken);
         }
 
-        private static void EnsureLSPEditorEnabled()
-        {
-            var settingsManager = (ISettingsManager)ServiceProvider.GlobalProvider.GetService(typeof(SVsSettingsPersistenceManager));
-            Assumes.Present(settingsManager);
-            var featureFlags = (IVsFeatureFlags)AsyncPackage.GetGlobalService(typeof(SVsFeatureFlags));
-            var legacyEditorFeatureFlagEnabled = featureFlags.IsFeatureEnabled(LegacyRazorEditorFeatureFlag, defaultValue: false);
-            Assert.AreEqual(false, legacyEditorFeatureFlagEnabled, "Expected Legacy Editor Feature Flag to be disabled, but it was enabled");
+        // Making a code change gets us flowing new generated code versions around the system
+        // which seems to have a positive effect on Web Tools in particular. Given the relatively
+        // fast pace of running integration tests, it's worth taking a slight delay at the start for a more reliable run.
+        TestServices.Input.Send("{ENTER}");
 
-            var useLegacyEditor = settingsManager.GetValueOrDefault<bool>(UseLegacyASPNETCoreEditorSetting);
-            Assert.AreEqual(false, useLegacyEditor, "Expected the Legacy Razor Editor to be disabled, but it was enabled");
+        // Close the file we opened, just in case, so the test can start with a clean slate
+        await TestServices.Editor.CloseCodeFileAsync(RazorProjectConstants.BlazorProjectName, RazorProjectConstants.IndexRazorFile, saveFile: false, ControlledHangMitigatingCancellationToken);
+
+        _testLogger.LogInformation($"#### Razor integration test initialize finished.");
+    }
+
+    private async Task<string> CreateAndOpenBlazorProjectAsync(CancellationToken cancellationToken)
+    {
+        await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+
+        await TestServices.SolutionExplorer.CloseSolutionAndWaitAsync(cancellationToken);
+
+        var solutionPath = CreateTemporaryPath();
+
+        using var zipStream = typeof(AbstractRazorEditorTest).Assembly.GetManifestResourceStream(ProjectZipFile);
+        using var zip = new ZipArchive(zipStream);
+        zip.ExtractToDirectory(solutionPath);
+
+        var slnFile = Directory.EnumerateFiles(solutionPath, "*.sln").Single();
+
+        foreach (var projectFile in Directory.EnumerateFiles(solutionPath, "*.csproj", SearchOption.AllDirectories))
+        {
+            PrepareProjectForFirstOpen(projectFile);
         }
 
-        private static void EnsureMEFCompositionSuccessForRazor()
+        await TestServices.SolutionExplorer.OpenSolutionAsync(slnFile, cancellationToken);
+
+        return Directory.EnumerateFiles(solutionPath, $"{RazorProjectConstants.BlazorProjectName}.csproj", SearchOption.AllDirectories).Single();
+    }
+
+    protected virtual void PrepareProjectForFirstOpen(string projectFileName)
+    {
+        var sb = new StringBuilder();
+        foreach (var line in File.ReadAllLines(projectFileName))
         {
-            var hiveDirectory = VisualStudioLogging.GetHiveDirectory();
-            var cmcPath = Path.Combine(hiveDirectory, "ComponentModelCache");
-            if (!Directory.Exists(cmcPath))
+            if (line.Contains("<TargetFramework"))
             {
-                throw new InvalidOperationException("ComponentModelCache directory doesn't exist");
+                sb.AppendLine(TargetFrameworkElement);
             }
-
-            var mefErrorFile = Path.Combine(cmcPath, "Microsoft.VisualStudio.Default.err");
-            if (!File.Exists(mefErrorFile))
+            else
             {
-                throw new InvalidOperationException("Expected ComponentModelCache error file to exist");
-            }
-
-            var txt = File.ReadAllText(mefErrorFile);
-            const string Separator = "----------- Used assemblies -----------";
-            var content = txt.Split(new string[] { Separator }, StringSplitOptions.RemoveEmptyEntries);
-            var errors = content[0];
-            if (errors.Contains("Razor"))
-            {
-                throw new InvalidOperationException($"Razor errors detected in MEF cache: {errors}");
+                sb.AppendLine(line);
             }
         }
 
-        private async Task EnsureTextViewRolesAsync(CancellationToken cancellationToken)
+        File.WriteAllText(projectFileName, sb.ToString());
+    }
+
+    private static string CreateTemporaryPath()
+    {
+        return Path.Combine(Path.GetTempPath(), "razor-test", Path.GetRandomFileName());
+    }
+
+    public override async Task DisposeAsync()
+    {
+        _testLogger!.LogInformation($"#### Razor integration test dispose.");
+
+        using (var disposeSource = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
         {
-            var textView = await TestServices.Editor.GetActiveTextViewAsync(cancellationToken);
-            var contentType = textView.TextSnapshot.ContentType;
-            Assert.AreEqual("Razor", contentType.TypeName);
+            await TestServices.Shell.CloseEverythingAsync(disposeSource.Token);
         }
 
-        private async Task EnsureExtensionInstalledAsync(CancellationToken cancellationToken)
+        TestServices.Output.ClearIntegrationTestLogger();
+
+        await base.DisposeAsync();
+    }
+
+    private static void EnsureLSPEditorEnabled()
+    {
+        var settingsManager = (ISettingsManager)ServiceProvider.GlobalProvider.GetService(typeof(SVsSettingsPersistenceManager));
+        Assumes.Present(settingsManager);
+
+        var useLegacyEditor = settingsManager.GetValueOrDefault<bool>(WellKnownSettingNames.UseLegacyASPNETCoreEditor);
+        Assert.False(useLegacyEditor, "Expected the Legacy Razor Editor to be disabled, but it was enabled");
+    }
+
+    private async Task EnsureTextViewRolesAsync(CancellationToken cancellationToken)
+    {
+        var textView = await TestServices.Editor.GetActiveTextViewAsync(cancellationToken);
+        var contentType = textView.TextSnapshot.ContentType;
+        Assert.Equal("Razor", contentType.TypeName);
+    }
+
+    private async Task EnsureExtensionInstalledAsync(CancellationToken cancellationToken)
+    {
+        const string AssemblyName = "Microsoft.CodeAnalysis.Razor.Workspaces";
+        using var semaphore = new SemaphoreSlim(1);
+        await semaphore.WaitAsync(cancellationToken);
+
+        AppDomain.CurrentDomain.AssemblyLoad += CurrentDomain_AssemblyLoad;
+
+        var localAppData = Environment.GetEnvironmentVariable("LocalAppData");
+        Assembly? assembly = null;
+        try
         {
-            const string AssemblyName = "Microsoft.AspNetCore.Razor.LanguageServer";
-            using var semaphore = new SemaphoreSlim(1);
-            await semaphore.WaitAsync(cancellationToken);
-
-            AppDomain.CurrentDomain.AssemblyLoad += CurrentDomain_AssemblyLoad;
-
-            var localAppData = Environment.GetEnvironmentVariable("LocalAppData");
-            Assembly? assembly = null;
-            try
-            {
-                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-                assembly = assemblies.FirstOrDefault((assembly) => assembly.GetName().Name.Equals(AssemblyName));
-                if (assembly is null)
-                {
-                    await semaphore.WaitAsync(cancellationToken);
-                }
-
-                semaphore.Release();
-            }
-            finally
-            {
-                AppDomain.CurrentDomain.AssemblyLoad -= CurrentDomain_AssemblyLoad;
-            }
-
+            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            assembly = assemblies.FirstOrDefault((assembly) => assembly.GetName().Name.Equals(AssemblyName));
             if (assembly is null)
             {
-                throw new NotImplementedException($"Integration test did not load extension");
+                await semaphore.WaitAsync(cancellationToken);
             }
 
+            semaphore.Release();
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.AssemblyLoad -= CurrentDomain_AssemblyLoad;
+        }
+
+        if (assembly is null)
+        {
+            throw new NotImplementedException($"Integration test did not load extension");
+        }
+
+        if (!assembly.Location.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase))
+        {
             var version = assembly.GetName().Version;
+            throw new NotImplementedException($"Integration test not running against Experimental Extension assembly: {assembly.Location} version: {version}");
+        }
 
-            if (!version.Equals(new Version(42, 42, 42, 42)) || !assembly.Location.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase))
+        void CurrentDomain_AssemblyLoad(object sender, AssemblyLoadEventArgs args)
+        {
+            if (args.LoadedAssembly.GetName().Name.Equals(AssemblyName, StringComparison.Ordinal))
             {
-                throw new NotImplementedException($"Integration test not running against Experimental Extension {assembly.Location}");
-            }
-
-            void CurrentDomain_AssemblyLoad(object sender, AssemblyLoadEventArgs args)
-            {
-                if (args.LoadedAssembly.GetName().Name.Equals(AssemblyName, StringComparison.Ordinal))
-                {
-                    assembly = args.LoadedAssembly;
-                    semaphore.Release();
-                }
+                assembly = args.LoadedAssembly;
+                semaphore.Release();
             }
         }
     }

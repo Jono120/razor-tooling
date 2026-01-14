@@ -1,43 +1,42 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using MediatR;
 using Microsoft.AspNetCore.Razor.LanguageServer.EndpointContracts;
-using Microsoft.Extensions.Logging;
+using Microsoft.CodeAnalysis.Razor.Logging;
+using Microsoft.CodeAnalysis.Razor.Protocol;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer
+namespace Microsoft.AspNetCore.Razor.LanguageServer;
+
+internal sealed class RazorConfigurationEndpoint(
+    LspServices services,
+    RazorLSPOptionsMonitor optionsMonitor,
+    ILoggerFactory loggerFactory)
+    : IDidChangeConfigurationEndpoint, IOnInitialized
 {
-    internal class RazorConfigurationEndpoint : IDidChangeConfigurationEndpoint
+    private readonly LspServices _services = services;
+    private readonly RazorLSPOptionsMonitor _optionsMonitor = optionsMonitor;
+    private readonly ILogger _logger = loggerFactory.GetOrCreateLogger<RazorConfigurationEndpoint>();
+
+    public bool MutatesSolutionState => true;
+
+    public async Task HandleNotificationAsync(DidChangeConfigurationParams request, RazorRequestContext requestContext, CancellationToken cancellationToken)
     {
-        private readonly RazorLSPOptionsMonitor _optionsMonitor;
-        private readonly ILogger _logger;
+        _logger.LogInformation($"Settings changed. Updating the server.");
 
-        public RazorConfigurationEndpoint(RazorLSPOptionsMonitor optionsMonitor, ILoggerFactory loggerFactory)
+        await _optionsMonitor.UpdateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task OnInitializedAsync(CancellationToken cancellationToken)
+    {
+        var capabilitiesService = _services.GetRequiredService<IClientCapabilitiesService>();
+        var clientCapabilities = capabilitiesService.ClientCapabilities;
+
+        if (clientCapabilities.Workspace?.Configuration == true)
         {
-            if (optionsMonitor is null)
-            {
-                throw new ArgumentNullException(nameof(optionsMonitor));
-            }
-
-            if (loggerFactory is null)
-            {
-                throw new ArgumentNullException(nameof(loggerFactory));
-            }
-
-            _optionsMonitor = optionsMonitor;
-            _logger = loggerFactory.CreateLogger<RazorConfigurationEndpoint>();
-        }
-
-        public async Task<Unit> Handle(DidChangeConfigurationParamsBridge request, CancellationToken cancellationToken)
-        {
-            _logger.LogTrace("Settings changed. Updating the server.");
-
-            await _optionsMonitor.UpdateAsync(cancellationToken);
-
-            return new Unit();
+            await _optionsMonitor.UpdateAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 }

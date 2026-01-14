@@ -1,213 +1,213 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.Test.Common;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.Razor;
+using Microsoft.AspNetCore.Razor.Test.Common.LanguageServer;
 using Microsoft.CodeAnalysis.Razor.ProjectSystem;
 using Microsoft.CodeAnalysis.Text;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer
+namespace Microsoft.AspNetCore.Razor.LanguageServer;
+
+public class OpenDocumentGeneratorTest(ITestOutputHelper testOutput) : LanguageServerTestBase(testOutput)
 {
-    public class OpenDocumentGeneratorTest : LanguageServerTestBase
+    private readonly HostDocument[] _documents =
+    [
+        new HostDocument("c:/Test1/Index.cshtml", "Index.cshtml"),
+        new HostDocument("c:/Test1/Components/Counter.cshtml", "Components/Counter.cshtml"),
+    ];
+
+    private readonly HostProject _hostProject1 = new("c:/Test1/Test1.csproj", "c:/Test1/obj", RazorConfiguration.Default, "TestRootNamespace");
+    private readonly HostProject _hostProject2 = new("c:/Test2/Test2.csproj", "c:/Test2/obj", RazorConfiguration.Default, "TestRootNamespace");
+
+    [Fact]
+    public async Task AddDocument_ProcessesOpenDocument()
     {
-        public OpenDocumentGeneratorTest()
-        {
-            Documents = new HostDocument[]
-            {
-                new HostDocument("c:/Test1/Index.cshtml", "Index.cshtml"),
-                new HostDocument("c:/Test1/Components/Counter.cshtml", "Components/Counter.cshtml"),
-            };
+        // Arrange
+        var projectManager = CreateProjectSnapshotManager(new LspProjectEngineFactoryProvider(TestRazorLSPOptionsMonitor.Create()));
+        var listener = new TestDocumentProcessedListener();
+        using var generator = CreateOpenDocumentGenerator(projectManager, listener);
 
-            HostProject1 = new HostProject("c:/Test1/Test1.csproj", RazorConfiguration.Default, "TestRootNamespace");
-            HostProject2 = new HostProject("c:/Test2/Test2.csproj", RazorConfiguration.Default, "TestRootNamespace");
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.AddProject(_hostProject1);
+            updater.AddProject(_hostProject2);
+            updater.AddDocument(_hostProject1.Key, _documents[0], EmptyTextLoader.Instance);
+            updater.OpenDocument(_hostProject1.Key, _documents[0].FilePath, SourceText.From(string.Empty));
+        });
+
+        await listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromSeconds(10));
+        listener.Reset();
+
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.RemoveDocument(_hostProject1.Key, _documents[0].FilePath);
+            updater.AddDocument(_hostProject2.Key, _documents[0], EmptyTextLoader.Instance);
+        });
+
+        // Assert
+        var document = await listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromSeconds(10));
+        Assert.Equal(_hostProject2.Key, document.Project.Key);
+        Assert.Equal(_documents[0].FilePath, document.FilePath);
+    }
+
+    [Fact]
+    public async Task AddDocument_IgnoresClosedDocument()
+    {
+        // Arrange
+        var projectManager = CreateProjectSnapshotManager();
+        var listener = new TestDocumentProcessedListener();
+        using var generator = CreateOpenDocumentGenerator(projectManager, listener);
+
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.AddProject(_hostProject1);
+            updater.AddProject(_hostProject2);
+
+            // Act
+            updater.AddDocument(_hostProject1.Key, _documents[0], EmptyTextLoader.Instance);
+        });
+
+        // Assert
+        await Assert.ThrowsAsync<TaskCanceledException>(() => listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromMilliseconds(50)));
+    }
+
+    [Fact]
+    public async Task UpdateDocumentText_IgnoresClosedDocument()
+    {
+        // Arrange
+        var projectManager = CreateProjectSnapshotManager();
+        var listener = new TestDocumentProcessedListener();
+        using var generator = CreateOpenDocumentGenerator(projectManager, listener);
+
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.AddProject(_hostProject1);
+            updater.AddProject(_hostProject2);
+            updater.AddDocument(_hostProject1.Key, _documents[0], EmptyTextLoader.Instance);
+
+            // Act
+            updater.UpdateDocumentText(_hostProject1.Key, _documents[0].FilePath, SourceText.From("new"));
+        });
+
+        // Assert
+        await Assert.ThrowsAsync<TaskCanceledException>(() => listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromMilliseconds(50)));
+    }
+
+    [Fact]
+    public async Task UpdateDocumentText_ProcessesOpenDocument()
+    {
+        // Arrange
+        var projectManager = CreateProjectSnapshotManager();
+        var listener = new TestDocumentProcessedListener();
+        using var generator = CreateOpenDocumentGenerator(projectManager, listener);
+
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.AddProject(_hostProject1);
+            updater.AddProject(_hostProject2);
+            updater.AddDocument(_hostProject1.Key, _documents[0], EmptyTextLoader.Instance);
+            updater.OpenDocument(_hostProject1.Key, _documents[0].FilePath, SourceText.From(string.Empty));
+
+            // Act
+            updater.UpdateDocumentText(_hostProject1.Key, _documents[0].FilePath, SourceText.From("new"));
+        });
+
+        // Assert
+
+        var document = await listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromSeconds(10));
+        Assert.Equal(document.FilePath, _documents[0].FilePath);
+    }
+
+    [Fact]
+    public async Task UpdateProjectWorkspaceState_IgnoresClosedDocument()
+    {
+        // Arrange
+        var projectManager = CreateProjectSnapshotManager();
+        var listener = new TestDocumentProcessedListener();
+        using var generator = CreateOpenDocumentGenerator(projectManager, listener);
+
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.AddProject(_hostProject1);
+            updater.AddProject(_hostProject2);
+            updater.AddDocument(_hostProject1.Key, _documents[0], EmptyTextLoader.Instance);
+
+            // Act
+            updater.UpdateProjectWorkspaceState(_hostProject1.Key, ProjectWorkspaceState.Default);
+        });
+
+        // Assert
+        await Assert.ThrowsAsync<TaskCanceledException>(() => listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromMilliseconds(50)));
+    }
+
+    [Fact]
+    public async Task UpdateProjectWorkspaceState_ProcessesOpenDocument()
+    {
+        // Arrange
+        var projectManager = CreateProjectSnapshotManager();
+        var listener = new TestDocumentProcessedListener();
+        using var generator = CreateOpenDocumentGenerator(projectManager, listener);
+
+        await projectManager.UpdateAsync(updater =>
+        {
+            updater.AddProject(_hostProject1);
+            updater.AddProject(_hostProject2);
+            updater.AddDocument(_hostProject1.Key, _documents[0], EmptyTextLoader.Instance);
+            updater.OpenDocument(_hostProject1.Key, _documents[0].FilePath, SourceText.From(string.Empty));
+
+            // Act
+            updater.UpdateProjectWorkspaceState(_hostProject1.Key, ProjectWorkspaceState.Default);
+        });
+
+        // Assert
+        var document = await listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromSeconds(10));
+        Assert.Equal(document.FilePath, _documents[0].FilePath);
+    }
+
+    private OpenDocumentGenerator CreateOpenDocumentGenerator(
+        ProjectSnapshotManager projectManager,
+        params IDocumentProcessedListener[] listeners)
+    {
+        return new OpenDocumentGenerator(listeners, projectManager, LoggerFactory);
+    }
+
+    private class TestDocumentProcessedListener : IDocumentProcessedListener
+    {
+        private TaskCompletionSource<IDocumentSnapshot> _tcs;
+
+        public TestDocumentProcessedListener()
+        {
+            _tcs = new TaskCompletionSource<IDocumentSnapshot>();
         }
 
-        private HostDocument[] Documents { get; }
-
-        private HostProject HostProject1 { get; }
-
-        private HostProject HostProject2 { get; }
-
-        [Fact]
-        public async Task DocumentAdded_IgnoresClosedDocument()
+        public Task<IDocumentSnapshot> GetProcessedDocumentAsync(TimeSpan cancelAfter)
         {
-            // Arrange
-            var projectManager = TestProjectSnapshotManager.Create(Dispatcher);
-            var listener = new TestDocumentProcessedListener();
-            var queue = new TestOpenDocumentGenerator(Dispatcher, listener);
+            var cts = new CancellationTokenSource(cancelAfter);
+            var registration = cts.Token.Register(() => _tcs.SetCanceled());
+            _ = _tcs.Task.ContinueWith(
+                (t) =>
+                {
+                    registration.Dispose();
+                    cts.Dispose();
+                },
+                TaskScheduler.Current);
 
-            await Dispatcher.RunOnDispatcherThreadAsync(() =>
-            {
-                projectManager.ProjectAdded(HostProject1);
-                projectManager.ProjectAdded(HostProject2);
-                projectManager.AllowNotifyListeners = true;
-
-                queue.Initialize(projectManager);
-
-                // Act
-                projectManager.DocumentAdded(HostProject1, Documents[0], null);
-            }, CancellationToken.None);
-
-            // Assert
-            await Assert.ThrowsAsync<TaskCanceledException>(() => listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromMilliseconds(50)));
+            return _tcs.Task;
         }
 
-        [Fact]
-        public async Task DocumentChanged_IgnoresClosedDocument()
+        public void DocumentProcessed(RazorCodeDocument codeDocument, DocumentSnapshot document)
         {
-            // Arrange
-            var projectManager = TestProjectSnapshotManager.Create(Dispatcher);
-            var listener = new TestDocumentProcessedListener();
-            var queue = new TestOpenDocumentGenerator(Dispatcher, listener);
-
-            await Dispatcher.RunOnDispatcherThreadAsync(() =>
-            {
-                projectManager.ProjectAdded(HostProject1);
-                projectManager.ProjectAdded(HostProject2);
-                projectManager.AllowNotifyListeners = true;
-                projectManager.DocumentAdded(HostProject1, Documents[0], null);
-
-                queue.Initialize(projectManager);
-
-                // Act
-                projectManager.DocumentChanged(HostProject1.FilePath, Documents[0].FilePath, SourceText.From("new"));
-            }, CancellationToken.None);
-
-            // Assert
-            await Assert.ThrowsAsync<TaskCanceledException>(() => listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromMilliseconds(50)));
+            _tcs.SetResult(document);
         }
 
-        [Fact]
-        public async Task DocumentChanged_ProcessesOpenDocument()
+        internal void Reset()
         {
-            // Arrange
-            var projectManager = TestProjectSnapshotManager.Create(Dispatcher);
-            var listener = new TestDocumentProcessedListener();
-            var queue = new TestOpenDocumentGenerator(Dispatcher, listener);
-
-            await Dispatcher.RunOnDispatcherThreadAsync(() =>
-            {
-                projectManager.ProjectAdded(HostProject1);
-                projectManager.ProjectAdded(HostProject2);
-                projectManager.AllowNotifyListeners = true;
-                projectManager.DocumentAdded(HostProject1, Documents[0], null);
-                projectManager.DocumentOpened(HostProject1.FilePath, Documents[0].FilePath, SourceText.From(string.Empty));
-
-                queue.Initialize(projectManager);
-
-                // Act
-                projectManager.DocumentChanged(HostProject1.FilePath, Documents[0].FilePath, SourceText.From("new"));
-            }, CancellationToken.None);
-
-            // Assert
-
-            var document = await listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromSeconds(10));
-            Assert.Equal(document.FilePath, Documents[0].FilePath);
-        }
-
-        [Fact]
-        public async Task ProjectChanged_IgnoresClosedDocument()
-        {
-            // Arrange
-            var projectManager = TestProjectSnapshotManager.Create(Dispatcher);
-            var listener = new TestDocumentProcessedListener();
-            var queue = new TestOpenDocumentGenerator(Dispatcher, listener);
-
-            await Dispatcher.RunOnDispatcherThreadAsync(() =>
-            {
-                projectManager.ProjectAdded(HostProject1);
-                projectManager.ProjectAdded(HostProject2);
-                projectManager.AllowNotifyListeners = true;
-                projectManager.DocumentAdded(HostProject1, Documents[0], null);
-
-                queue.Initialize(projectManager);
-
-                // Act
-                projectManager.ProjectWorkspaceStateChanged(HostProject1.FilePath, new ProjectWorkspaceState(Array.Empty<TagHelperDescriptor>(), LanguageVersion.CSharp8));
-            }, CancellationToken.None);
-
-            // Assert
-            await Assert.ThrowsAsync<TaskCanceledException>(() => listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromMilliseconds(50)));
-        }
-
-        [Fact]
-        public async Task ProjectChanged_ProcessesOpenDocument()
-        {
-            // Arrange
-            var projectManager = TestProjectSnapshotManager.Create(Dispatcher);
-            var listener = new TestDocumentProcessedListener();
-            var queue = new TestOpenDocumentGenerator(Dispatcher, listener);
-
-            await Dispatcher.RunOnDispatcherThreadAsync(() =>
-            {
-                projectManager.ProjectAdded(HostProject1);
-                projectManager.ProjectAdded(HostProject2);
-                projectManager.AllowNotifyListeners = true;
-                projectManager.DocumentAdded(HostProject1, Documents[0], null);
-                projectManager.DocumentOpened(HostProject1.FilePath, Documents[0].FilePath, SourceText.From(string.Empty));
-
-                queue.Initialize(projectManager);
-
-                // Act
-                projectManager.ProjectWorkspaceStateChanged(HostProject1.FilePath, new ProjectWorkspaceState(Array.Empty<TagHelperDescriptor>(), LanguageVersion.CSharp8));
-            }, CancellationToken.None);
-
-            // Assert
-
-            var document = await listener.GetProcessedDocumentAsync(cancelAfter: TimeSpan.FromSeconds(10));
-            Assert.Equal(document.FilePath, Documents[0].FilePath);
-        }
-
-        private class TestOpenDocumentGenerator : OpenDocumentGenerator
-        {
-            public TestOpenDocumentGenerator(
-                ProjectSnapshotManagerDispatcher projectSnapshotManagerDispatcher,
-                params DocumentProcessedListener[] listeners)
-                : base(listeners, projectSnapshotManagerDispatcher, new DefaultErrorReporter())
-            {
-            }
-        }
-
-        private class TestDocumentProcessedListener : DocumentProcessedListener
-        {
-            private readonly TaskCompletionSource<DocumentSnapshot> _tcs;
-
-            public TestDocumentProcessedListener()
-            {
-                _tcs = new TaskCompletionSource<DocumentSnapshot>();
-            }
-
-            public Task<DocumentSnapshot> GetProcessedDocumentAsync(TimeSpan cancelAfter)
-            {
-                var cts = new CancellationTokenSource(cancelAfter);
-                var registration = cts.Token.Register(() => _tcs.SetCanceled(cts.Token));
-                _ = _tcs.Task.ContinueWith(
-                    (t) =>
-                    {
-                        registration.Dispose();
-                        cts.Dispose();
-                    },
-                    TaskScheduler.Current);
-
-                return _tcs.Task;
-            }
-
-            public override void DocumentProcessed(RazorCodeDocument codeDocument, DocumentSnapshot document)
-            {
-                _tcs.SetResult(document);
-            }
-
-            public override void Initialize(ProjectSnapshotManager projectManager)
-            {
-            }
+            _tcs = new TaskCompletionSource<IDocumentSnapshot>();
         }
     }
 }

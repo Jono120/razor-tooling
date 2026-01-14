@@ -1,1129 +1,886 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
-
-using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.Host;
+using Microsoft.AspNetCore.Razor.Test.Common;
+using Microsoft.AspNetCore.Razor.Test.Common.ProjectSystem;
+using Microsoft.CodeAnalysis.Razor.ProjectEngineHost;
+using Microsoft.CodeAnalysis.Razor.Utilities;
 using Microsoft.CodeAnalysis.Text;
 using Xunit;
+using Xunit.Abstractions;
+using static Microsoft.AspNetCore.Razor.Test.Common.TestProjectData;
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.CodeAnalysis.Razor.ProjectSystem;
+
+public class ProjectStateTest(ITestOutputHelper testOutput) : ToolingTestBase(testOutput)
 {
-    public class ProjectStateTest : WorkspaceTestBase
+    private static readonly IProjectEngineFactoryProvider s_projectEngineFactoryProvider =
+        TestProjectEngineFactoryProvider.Instance.AddConfigure(
+            static b => b.SetImportFeature(new TestImportProjectFeature(HierarchicalImports.Legacy)));
+
+    private static readonly HostProject s_hostProject =
+        SomeProject with { Configuration = FallbackRazorConfiguration.MVC_2_0 };
+
+    private static readonly ProjectWorkspaceState s_projectWorkspaceState =
+        ProjectWorkspaceState.Create([TagHelperDescriptorBuilder.CreateTagHelper("TestTagHelper", "TestAssembly").Build()]);
+
+    private static readonly SourceText s_text = SourceText.From("Hello, world!");
+    private static readonly TextLoader s_textLoader = TestMocks.CreateTextLoader(s_text);
+
+    [Fact]
+    public void GetImportDocumentTargetPaths_DoesNotIncludeCurrentImport()
     {
-        public ProjectStateTest()
-        {
-            HostProject = new HostProject(TestProjectData.SomeProject.FilePath, FallbackRazorConfiguration.MVC_2_0, TestProjectData.SomeProject.RootNamespace);
-            HostProjectWithConfigurationChange = new HostProject(TestProjectData.SomeProject.FilePath, FallbackRazorConfiguration.MVC_1_0, TestProjectData.SomeProject.RootNamespace);
-            ProjectWorkspaceState = new ProjectWorkspaceState(new[]
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState);
+
+        // Act
+        var paths = state.GetImportDocumentTargetPaths(SomeProjectComponentImportFile1);
+
+        // Assert
+        Assert.DoesNotContain(SomeProjectComponentImportFile1.TargetPath, paths);
+    }
+
+    [Fact]
+    public void ProjectState_ConstructedNew()
+    {
+        // Arrange & Act
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState);
+
+        // Assert
+        Assert.Empty(state.Documents);
+    }
+
+    [Fact]
+    public void ProjectState_AddDocument_ToEmpty()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState);
+
+        // Act
+        var newState = state.AddEmptyDocument(SomeProjectFile1);
+
+        // Assert
+        var documentState = Assert.Single(newState.Documents.Values);
+        Assert.Same(SomeProjectFile1, documentState.HostDocument);
+    }
+
+    [Fact]
+    public async Task ProjectState_AddDocument_DocumentIsEmpty()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState);
+
+        // Act
+        var newState = state.AddEmptyDocument(SomeProjectFile1);
+
+        // Assert
+        var text = await newState.Documents[SomeProjectFile1.FilePath].GetTextAsync(DisposalToken);
+        Assert.Equal(0, text.Length);
+    }
+
+    [Fact]
+    public void ProjectState_AddDocument_ToProjectWithDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.AddEmptyDocument(SomeProjectFile1);
+
+        // Assert
+        Assert.Collection(
+            newState.Documents.OrderBy(static kvp => kvp.Key),
+            d => Assert.Same(AnotherProjectNestedFile3, d.Value.HostDocument),
+            d => Assert.Same(SomeProjectFile1, d.Value.HostDocument),
+            d => Assert.Same(SomeProjectFile2, d.Value.HostDocument));
+    }
+
+    [Fact]
+    public void ProjectState_AddDocument_TracksImports()
+    {
+        // Arrange & Act
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4);
+
+        // Assert
+        Assert.Collection(
+            state.ImportsToRelatedDocuments.OrderBy(kvp => kvp.Key),
+            kvp =>
             {
-                TagHelperDescriptorBuilder.Create("TestTagHelper", "TestAssembly").Build(),
-            }, default);
-
-            SomeTagHelpers = new List<TagHelperDescriptor>
+                Assert.Equal(SomeProjectImportFile.TargetPath, kvp.Key);
+                Assert.Equal(
+                    [
+                        AnotherProjectNestedFile4.FilePath,
+                        SomeProjectFile1.FilePath,
+                        SomeProjectFile2.FilePath,
+                        SomeProjectNestedFile3.FilePath,
+                    ],
+                    kvp.Value.OrderBy(f => f));
+            },
+            kvp =>
             {
-                TagHelperDescriptorBuilder.Create("Test1", "TestAssembly").Build()
-            };
+                Assert.Equal(SomeProjectNestedImportFile.TargetPath, kvp.Key);
+                Assert.Equal(
+                    [
+                        AnotherProjectNestedFile4.FilePath,
+                        SomeProjectNestedFile3.FilePath,
+                    ],
+                    kvp.Value.OrderBy(f => f));
+            });
+    }
 
-            Documents = new HostDocument[]
+    [Fact]
+    public void ProjectState_AddDocument_TracksImports_AddImportFile()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4);
+
+        // Act
+        var newState = state.AddEmptyDocument(AnotherProjectImportFile);
+
+        // Assert
+        Assert.Collection(
+            newState.ImportsToRelatedDocuments.OrderBy(kvp => kvp.Key),
+            kvp =>
             {
-                TestProjectData.SomeProjectFile1,
-                TestProjectData.SomeProjectFile2,
-
-                // linked file
-                TestProjectData.AnotherProjectNestedFile3,
-            };
-
-            Text = SourceText.From("Hello, world!");
-            TextLoader = () => Task.FromResult(TextAndVersion.Create(Text, VersionStamp.Create()));
-        }
-
-        private HostDocument[] Documents { get; }
-
-        private HostProject HostProject { get; }
-
-        private HostProject HostProjectWithConfigurationChange { get; }
-
-        private ProjectWorkspaceState ProjectWorkspaceState { get; }
-
-        private TestTagHelperResolver TagHelperResolver { get; set; }
-
-        private List<TagHelperDescriptor> SomeTagHelpers { get; }
-
-        private Func<Task<TextAndVersion>> TextLoader { get; }
-
-        private SourceText Text { get; }
-
-        protected override void ConfigureWorkspaceServices(List<IWorkspaceService> services)
-        {
-            TagHelperResolver = new TestTagHelperResolver();
-            services.Add(TagHelperResolver);
-        }
-
-        protected override void ConfigureProjectEngine(RazorProjectEngineBuilder builder)
-        {
-            builder.SetImportFeature(new TestImportProjectFeature());
-        }
-
-        [Fact]
-        public void GetImportDocumentTargetPaths_DoesNotIncludeCurrentImport()
-        {
-            // Arrange
-            var state = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-
-            // Act
-            var paths = state.GetImportDocumentTargetPaths(TestProjectData.SomeProjectComponentImportFile1);
-
-            // Assert
-            Assert.DoesNotContain(TestProjectData.SomeProjectComponentImportFile1.TargetPath, paths);
-        }
-
-        [Fact]
-        public void ProjectState_ConstructedNew()
-        {
-            // Arrange
-
-            // Act
-            var state = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-
-            // Assert
-            Assert.Empty(state.Documents);
-            Assert.NotEqual(VersionStamp.Default, state.Version);
-        }
-
-        [Fact]
-        public void ProjectState_AddHostDocument_ToEmpty()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-
-            // Act
-            var state = original.WithAddedHostDocument(Documents[0], DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-
-            Assert.Collection(
-                state.Documents.OrderBy(kvp => kvp.Key),
-                d => Assert.Same(Documents[0], d.Value.HostDocument));
-            Assert.NotEqual(original.DocumentCollectionVersion, state.DocumentCollectionVersion);
-        }
-
-        [Fact] // When we first add a document, we have no way to read the text, so it's empty.
-        public async Task ProjectState_AddHostDocument_DocumentIsEmpty()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-
-            // Act
-            var state = original.WithAddedHostDocument(Documents[0], DocumentState.EmptyLoader);
-
-            // Assert
-            var text = await state.Documents[Documents[0].FilePath].GetTextAsync();
-            Assert.Equal(0, text.Length);
-        }
-
-        [Fact]
-        public void ProjectState_AddHostDocument_ToProjectWithDocuments()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithAddedHostDocument(Documents[0], DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-
-            Assert.Collection(
-                state.Documents.OrderBy(kvp => kvp.Key),
-                d => Assert.Same(Documents[2], d.Value.HostDocument),
-                d => Assert.Same(Documents[0], d.Value.HostDocument),
-                d => Assert.Same(Documents[1], d.Value.HostDocument));
-            Assert.NotEqual(original.DocumentCollectionVersion, state.DocumentCollectionVersion);
-        }
-
-        [Fact]
-        public void ProjectState_AddHostDocument_TracksImports()
-        {
-            // Arrange
-
-            // Act
-            var state = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile1, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile2, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectNestedFile3, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.AnotherProjectNestedFile4, DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.Collection(
-                state.ImportsToRelatedDocuments.OrderBy(kvp => kvp.Key),
-                kvp =>
-                {
-                    Assert.Equal(TestProjectData.SomeProjectImportFile.TargetPath, kvp.Key);
-                    Assert.Equal(
-                        new string[]
-                        {
-                            TestProjectData.AnotherProjectNestedFile4.FilePath,
-                            TestProjectData.SomeProjectFile1.FilePath,
-                            TestProjectData.SomeProjectFile2.FilePath,
-                            TestProjectData.SomeProjectNestedFile3.FilePath,
-                        },
-                        kvp.Value.OrderBy(f => f));
-                },
-                kvp =>
-                {
-                    Assert.Equal(TestProjectData.SomeProjectNestedImportFile.TargetPath, kvp.Key);
-                    Assert.Equal(
-                        new string[]
-                        {
-                            TestProjectData.AnotherProjectNestedFile4.FilePath,
-                            TestProjectData.SomeProjectNestedFile3.FilePath,
-                        },
-                        kvp.Value.OrderBy(f => f));
-                });
-        }
-
-        [Fact]
-        public void ProjectState_AddHostDocument_TracksImports_AddImportFile()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile1, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile2, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectNestedFile3, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.AnotherProjectNestedFile4, DocumentState.EmptyLoader);
-
-            // Act
-            var state = original
-                .WithAddedHostDocument(TestProjectData.AnotherProjectImportFile, DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.Collection(
-                state.ImportsToRelatedDocuments.OrderBy(kvp => kvp.Key),
-                kvp =>
-                {
-                    Assert.Equal(TestProjectData.SomeProjectImportFile.TargetPath, kvp.Key);
-                    Assert.Equal(
-                        new string[]
-                        {
-                            TestProjectData.AnotherProjectNestedFile4.FilePath,
-                            TestProjectData.SomeProjectFile1.FilePath,
-                            TestProjectData.SomeProjectFile2.FilePath,
-                            TestProjectData.SomeProjectNestedFile3.FilePath,
-                        },
-                        kvp.Value.OrderBy(f => f));
-                },
-                kvp =>
-                {
-                    Assert.Equal(TestProjectData.SomeProjectNestedImportFile.TargetPath, kvp.Key);
-                    Assert.Equal(
-                        new string[]
-                        {
-                            TestProjectData.AnotherProjectNestedFile4.FilePath,
-                            TestProjectData.SomeProjectNestedFile3.FilePath,
-                        },
-                        kvp.Value.OrderBy(f => f));
-                });
-        }
-
-        [Fact]
-        public void ProjectState_AddHostDocument_RetainsComputedState()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            // Act
-            var state = original.WithAddedHostDocument(Documents[0], DocumentState.EmptyLoader);
-
-            // Assert
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.Equal(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.Same(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-            Assert.Same(original.Documents[Documents[2].FilePath], state.Documents[Documents[2].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_AddHostDocument_DuplicateNoops()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithAddedHostDocument(new HostDocument(Documents[1].FilePath, "SomePath.cshtml"), DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.Same(original, state);
-        }
-
-        [Fact]
-        public async Task ProjectState_WithChangedHostDocument_Loader()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithChangedHostDocument(Documents[1], TextLoader);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-
-            var text = await state.Documents[Documents[1].FilePath].GetTextAsync();
-            Assert.Same(Text, text);
-
-            Assert.Equal(original.DocumentCollectionVersion, state.DocumentCollectionVersion);
-        }
-
-        [Fact]
-        public async Task ProjectState_WithChangedHostDocument_Snapshot()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithChangedHostDocument(Documents[1], Text, VersionStamp.Create());
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-
-            var text = await state.Documents[Documents[1].FilePath].GetTextAsync();
-            Assert.Same(Text, text);
-
-            Assert.Equal(original.DocumentCollectionVersion, state.DocumentCollectionVersion);
-        }
-
-        [Fact]
-        public void ProjectState_WithChangedHostDocument_Loader_RetainsComputedState()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            // Act
-            var state = original.WithChangedHostDocument(Documents[1], TextLoader);
-
-            // Assert
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.Equal(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_WithChangedHostDocument_Snapshot_RetainsComputedState()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            // Act
-            var state = original.WithChangedHostDocument(Documents[1], Text, VersionStamp.Create());
-
-            // Assert
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.Equal(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_WithChangedHostDocument_Loader_NotFoundNoops()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithChangedHostDocument(Documents[0], TextLoader);
-
-            // Assert
-            Assert.Same(original, state);
-        }
-
-        [Fact]
-        public void ProjectState_WithChangedHostDocument_Snapshot_NotFoundNoops()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithChangedHostDocument(Documents[0], Text, VersionStamp.Create());
-
-            // Assert
-            Assert.Same(original, state);
-        }
-
-        [Fact]
-        public void ProjectState_RemoveHostDocument_FromProjectWithDocuments()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithRemovedHostDocument(Documents[1]);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-
-            Assert.Collection(
-                state.Documents.OrderBy(kvp => kvp.Key),
-                d => Assert.Same(Documents[2], d.Value.HostDocument));
-
-            Assert.NotEqual(original.DocumentCollectionVersion, state.DocumentCollectionVersion);
-        }
-
-        [Fact]
-        public void ProjectState_RemoveHostDocument_TracksImports()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile1, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile2, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectNestedFile3, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.AnotherProjectNestedFile4, DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithRemovedHostDocument(TestProjectData.SomeProjectNestedFile3);
-
-            // Assert
-            Assert.Collection(
-                state.ImportsToRelatedDocuments.OrderBy(kvp => kvp.Key),
-                kvp =>
-                {
-                    Assert.Equal(TestProjectData.SomeProjectImportFile.TargetPath, kvp.Key);
-                    Assert.Equal(
-                        new string[]
-                        {
-                            TestProjectData.AnotherProjectNestedFile4.FilePath,
-                            TestProjectData.SomeProjectFile1.FilePath,
-                            TestProjectData.SomeProjectFile2.FilePath,
-                        },
-                        kvp.Value.OrderBy(f => f));
-                },
-                kvp =>
-                {
-                    Assert.Equal(TestProjectData.SomeProjectNestedImportFile.TargetPath, kvp.Key);
-                    Assert.Equal(
-                        new string[]
-                        {
-                            TestProjectData.AnotherProjectNestedFile4.FilePath,
-                        },
-                        kvp.Value.OrderBy(f => f));
-                });
-        }
-
-        [Fact]
-        public void ProjectState_RemoveHostDocument_TracksImports_RemoveAllDocuments()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile1, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectFile2, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.SomeProjectNestedFile3, DocumentState.EmptyLoader)
-                .WithAddedHostDocument(TestProjectData.AnotherProjectNestedFile4, DocumentState.EmptyLoader);
-
-            // Act
-            var state = original
-                .WithRemovedHostDocument(TestProjectData.SomeProjectFile1)
-                .WithRemovedHostDocument(TestProjectData.SomeProjectFile2)
-                .WithRemovedHostDocument(TestProjectData.SomeProjectNestedFile3)
-                .WithRemovedHostDocument(TestProjectData.AnotherProjectNestedFile4);
-
-            // Assert
-            Assert.Empty(state.Documents);
-            Assert.Empty(state.ImportsToRelatedDocuments);
-        }
-
-        [Fact]
-        public void ProjectState_RemoveHostDocument_RetainsComputedState()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            // Act
-            var state = original.WithRemovedHostDocument(Documents[2]);
-
-            // Assert
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.Equal(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.Same(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_RemoveHostDocument_NotFoundNoops()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithRemovedHostDocument(Documents[0]);
-
-            // Assert
-            Assert.Same(original, state);
-        }
-
-        [Fact]
-        public void ProjectState_WithHostProject_ConfigurationChange_UpdatesConfigurationState()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ConfigurationVersion;
-
-            TagHelperResolver.TagHelpers = SomeTagHelpers;
-
-            // Act
-            var state = original.WithHostProject(HostProjectWithConfigurationChange);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Same(HostProjectWithConfigurationChange, state.HostProject);
-
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ConfigurationVersion;
-
-            Assert.NotSame(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.NotEqual(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-            Assert.NotSame(original.Documents[Documents[2].FilePath], state.Documents[Documents[2].FilePath]);
-
-            Assert.NotEqual(original.DocumentCollectionVersion, state.DocumentCollectionVersion);
-        }
-
-        [Fact]
-        public void ProjectState_WithHostProject_RootNamespaceChange_UpdatesConfigurationState()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-            var hostProjectWithRootNamespaceChange = new HostProject(
-                original.HostProject.FilePath,
-                original.HostProject.Configuration,
-                "ChangedRootNamespace");
-
-            // Force init
-            _ = original.TagHelpers;
-            _ = original.ConfigurationVersion;
-
-            TagHelperResolver.TagHelpers = SomeTagHelpers;
-
-            // Act
-            var state = original.WithHostProject(hostProjectWithRootNamespaceChange);
-
-            // Assert
-            Assert.NotSame(original, state);
-        }
-
-        [Fact]
-        public void ProjectState_WithHostProject_NoConfigurationChange_Noops()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            _ = original.ProjectWorkspaceStateVersion;
-
-            // Act
-            var state = original.WithHostProject(HostProject);
-
-            // Assert
-            Assert.Same(original, state);
-        }
-
-        [Fact]
-        public void ProjectState_WithHostProject_CallsConfigurationChangeOnDocumentState()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[Documents[1].FilePath] = TestDocumentState.Create(Workspace.Services, Documents[1], onConfigurationChange: () => callCount++);
-            documents[Documents[2].FilePath] = TestDocumentState.Create(Workspace.Services, Documents[2], onConfigurationChange: () => callCount++);
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-
-            // Act
-            var state = original.WithHostProject(HostProjectWithConfigurationChange);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Same(HostProjectWithConfigurationChange, state.HostProject);
-            Assert.Equal(2, callCount);
-        }
-
-        [Fact]
-        public void ProjectState_WithHostProject_ResetsImportedDocuments()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original = original.WithAddedHostDocument(TestProjectData.SomeProjectFile1, DocumentState.EmptyLoader);
-
-            // Act
-            var state = original.WithHostProject(HostProjectWithConfigurationChange);
-
-            // Assert
-            var importMap = Assert.Single(state.ImportsToRelatedDocuments);
-            var documentFilePath = Assert.Single(importMap.Value);
-            Assert.Equal(TestProjectData.SomeProjectFile1.FilePath, documentFilePath);
-        }
-
-        [Fact]
-        public void ProjectState_WithProjectWorkspaceState_Removed()
-        {
-            // Arrange
-            var emptyProjectWorkspaceState = new ProjectWorkspaceState(Array.Empty<TagHelperDescriptor>(), default);
-            var original = ProjectState.Create(Workspace.Services, HostProject, emptyProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            // Act
-            var state = original.WithProjectWorkspaceState(null);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Null(state.ProjectWorkspaceState);
-
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            // The configuration didn't change, and the tag helpers didn't actually change
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.NotEqual(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-            Assert.NotSame(original.Documents[Documents[2].FilePath], state.Documents[Documents[2].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_WithProjectWorkspaceState_Added()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, null)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-            var newProjectWorkspaceState = ProjectWorkspaceState.Default;
-
-            // Act
-            var state = original.WithProjectWorkspaceState(newProjectWorkspaceState);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Same(newProjectWorkspaceState, state.ProjectWorkspaceState);
-
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            // The configuration didn't change, and the tag helpers didn't actually change
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.NotEqual(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_WithProjectWorkspaceState_Changed()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            var changed = new ProjectWorkspaceState(ProjectWorkspaceState.TagHelpers, LanguageVersion.CSharp6);
-
-            // Act
-            var state = original.WithProjectWorkspaceState(changed);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Same(changed, state.ProjectWorkspaceState);
-
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            // The C# language version changed, and the tag helpers didn't change
-            Assert.NotSame(original.ProjectEngine, state.ProjectEngine);
-            Assert.Same(originalTagHelpers, actualTagHelpers);
-            Assert.NotEqual(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-            Assert.NotSame(original.Documents[Documents[2].FilePath], state.Documents[Documents[2].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_WithProjectWorkspaceState_Changed_TagHelpersChanged()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            var originalTagHelpers = original.TagHelpers;
-            var originalProjectWorkspaceStateVersion = original.ProjectWorkspaceStateVersion;
-
-            var changed = new ProjectWorkspaceState(Array.Empty<TagHelperDescriptor>(), default);
-
-            // Now create some tag helpers
-            TagHelperResolver.TagHelpers = SomeTagHelpers;
-
-            // Act
-            var state = original.WithProjectWorkspaceState(changed);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Same(changed, state.ProjectWorkspaceState);
-
-            var actualTagHelpers = state.TagHelpers;
-            var actualProjectWorkspaceStateVersion = state.ProjectWorkspaceStateVersion;
-
-            // The configuration didn't change, but the tag helpers did
-            Assert.Same(original.ProjectEngine, state.ProjectEngine);
-            Assert.NotEqual(originalTagHelpers, actualTagHelpers);
-            Assert.NotEqual(originalProjectWorkspaceStateVersion, actualProjectWorkspaceStateVersion);
-            Assert.Equal(state.Version, actualProjectWorkspaceStateVersion);
-
-            Assert.NotSame(original.Documents[Documents[1].FilePath], state.Documents[Documents[1].FilePath]);
-            Assert.NotSame(original.Documents[Documents[2].FilePath], state.Documents[Documents[2].FilePath]);
-        }
-
-        [Fact]
-        public void ProjectState_WithProjectWorkspaceState_IdenticalState_Caches()
-        {
-            // Arrange
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState)
-                .WithAddedHostDocument(Documents[2], DocumentState.EmptyLoader)
-                .WithAddedHostDocument(Documents[1], DocumentState.EmptyLoader);
-
-            // Force init
-            _ = original.TagHelpers;
-            _ = original.ProjectWorkspaceStateVersion;
-
-            var changed = new ProjectWorkspaceState(original.TagHelpers, original.CSharpLanguageVersion);
-
-            // Now create some tag helpers
-            TagHelperResolver.TagHelpers = SomeTagHelpers;
-
-            // Act
-            var state = original.WithProjectWorkspaceState(changed);
-
-            // Assert
-            Assert.Same(original, state);
-        }
-
-        [Fact]
-        public void ProjectState_WithProjectWorkspaceState_CallsWorkspaceProjectChangeOnDocumentState()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[Documents[1].FilePath] = TestDocumentState.Create(Workspace.Services, Documents[1], onProjectWorkspaceStateChange: () => callCount++);
-            documents[Documents[2].FilePath] = TestDocumentState.Create(Workspace.Services, Documents[2], onProjectWorkspaceStateChange: () => callCount++);
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-
-            var changed = new ProjectWorkspaceState(Array.Empty<TagHelperDescriptor>(), default);
-
-            // Act
-            var state = original.WithProjectWorkspaceState(changed);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Equal(2, callCount);
-        }
-
-        [Fact]
-        public void ProjectState_WhenImportDocumentAdded_CallsImportsChanged()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var document1 = TestProjectData.SomeProjectFile1;
-            var document2 = TestProjectData.SomeProjectFile2;
-            var document3 = TestProjectData.SomeProjectNestedFile3;
-            var document4 = TestProjectData.AnotherProjectNestedFile4;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[document1.FilePath] = TestDocumentState.Create(Workspace.Services, document1, onImportsChange: () => callCount++);
-            documents[document2.FilePath] = TestDocumentState.Create(Workspace.Services, document2, onImportsChange: () => callCount++);
-            documents[document3.FilePath] = TestDocumentState.Create(Workspace.Services, document3, onImportsChange: () => callCount++);
-            documents[document4.FilePath] = TestDocumentState.Create(Workspace.Services, document4, onImportsChange: () => callCount++);
-
-            var importsToRelatedDocuments = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(FilePathComparer.Instance);
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectFile1.FilePath,
-                    TestProjectData.SomeProjectFile2.FilePath,
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectNestedImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-            original.ImportsToRelatedDocuments = importsToRelatedDocuments.ToImmutable();
-
-            // Act
-            var state = original.WithAddedHostDocument(TestProjectData.AnotherProjectImportFile, DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Equal(4, callCount);
-        }
-
-        [Fact]
-        public void ProjectState_WhenImportDocumentAdded_CallsImportsChanged_Nested()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var document1 = TestProjectData.SomeProjectFile1;
-            var document2 = TestProjectData.SomeProjectFile2;
-            var document3 = TestProjectData.SomeProjectNestedFile3;
-            var document4 = TestProjectData.AnotherProjectNestedFile4;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[document1.FilePath] = TestDocumentState.Create(Workspace.Services, document1, onImportsChange: () => callCount++);
-            documents[document2.FilePath] = TestDocumentState.Create(Workspace.Services, document2, onImportsChange: () => callCount++);
-            documents[document3.FilePath] = TestDocumentState.Create(Workspace.Services, document3, onImportsChange: () => callCount++);
-            documents[document4.FilePath] = TestDocumentState.Create(Workspace.Services, document4, onImportsChange: () => callCount++);
-
-            var importsToRelatedDocuments = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(FilePathComparer.Instance);
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectFile1.FilePath,
-                    TestProjectData.SomeProjectFile2.FilePath,
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectNestedImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-            original.ImportsToRelatedDocuments = importsToRelatedDocuments.ToImmutable();
-
-            // Act
-            var state = original.WithAddedHostDocument(TestProjectData.AnotherProjectNestedImportFile, DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Equal(2, callCount);
-        }
-
-        [Fact]
-        public void ProjectState_WhenImportDocumentChangedTextLoader_CallsImportsChanged()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var document1 = TestProjectData.SomeProjectFile1;
-            var document2 = TestProjectData.SomeProjectFile2;
-            var document3 = TestProjectData.SomeProjectNestedFile3;
-            var document4 = TestProjectData.AnotherProjectNestedFile4;
-            var document5 = TestProjectData.AnotherProjectNestedImportFile;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[document1.FilePath] = TestDocumentState.Create(Workspace.Services, document1, onImportsChange: () => callCount++);
-            documents[document2.FilePath] = TestDocumentState.Create(Workspace.Services, document2, onImportsChange: () => callCount++);
-            documents[document3.FilePath] = TestDocumentState.Create(Workspace.Services, document3, onImportsChange: () => callCount++);
-            documents[document4.FilePath] = TestDocumentState.Create(Workspace.Services, document4, onImportsChange: () => callCount++);
-            documents[document5.FilePath] = TestDocumentState.Create(Workspace.Services, document5, onImportsChange: () => callCount++);
-
-            var importsToRelatedDocuments = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(FilePathComparer.Instance);
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectFile1.FilePath,
-                    TestProjectData.SomeProjectFile2.FilePath,
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath,
-                    TestProjectData.AnotherProjectNestedImportFile.FilePath));
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectNestedImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-            original.ImportsToRelatedDocuments = importsToRelatedDocuments.ToImmutable();
-
-            // Act
-            var state = original.WithChangedHostDocument(document5, DocumentState.EmptyLoader);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Equal(2, callCount);
-        }
-
-        [Fact]
-        public void ProjectState_WhenImportDocumentChangedSnapshot_CallsImportsChanged()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var document1 = TestProjectData.SomeProjectFile1;
-            var document2 = TestProjectData.SomeProjectFile2;
-            var document3 = TestProjectData.SomeProjectNestedFile3;
-            var document4 = TestProjectData.AnotherProjectNestedFile4;
-            var document5 = TestProjectData.AnotherProjectNestedImportFile;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[document1.FilePath] = TestDocumentState.Create(Workspace.Services, document1, onImportsChange: () => callCount++);
-            documents[document2.FilePath] = TestDocumentState.Create(Workspace.Services, document2, onImportsChange: () => callCount++);
-            documents[document3.FilePath] = TestDocumentState.Create(Workspace.Services, document3, onImportsChange: () => callCount++);
-            documents[document4.FilePath] = TestDocumentState.Create(Workspace.Services, document4, onImportsChange: () => callCount++);
-            documents[document5.FilePath] = TestDocumentState.Create(Workspace.Services, document5, onImportsChange: () => callCount++);
-
-            var importsToRelatedDocuments = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(FilePathComparer.Instance);
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectFile1.FilePath,
-                    TestProjectData.SomeProjectFile2.FilePath,
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath,
-                    TestProjectData.AnotherProjectNestedImportFile.FilePath));
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectNestedImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-            original.ImportsToRelatedDocuments = importsToRelatedDocuments.ToImmutable();
-
-            // Act
-            var state = original.WithChangedHostDocument(document5, Text, VersionStamp.Create());
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Equal(2, callCount);
-        }
-
-        [Fact]
-        public void ProjectState_WhenImportDocumentRemoved_CallsImportsChanged()
-        {
-            // Arrange
-            var callCount = 0;
-
-            var document1 = TestProjectData.SomeProjectFile1;
-            var document2 = TestProjectData.SomeProjectFile2;
-            var document3 = TestProjectData.SomeProjectNestedFile3;
-            var document4 = TestProjectData.AnotherProjectNestedFile4;
-            var document5 = TestProjectData.AnotherProjectNestedImportFile;
-
-            var documents = ImmutableDictionary.CreateBuilder<string, DocumentState>(FilePathComparer.Instance);
-            documents[document1.FilePath] = TestDocumentState.Create(Workspace.Services, document1, onImportsChange: () => callCount++);
-            documents[document2.FilePath] = TestDocumentState.Create(Workspace.Services, document2, onImportsChange: () => callCount++);
-            documents[document3.FilePath] = TestDocumentState.Create(Workspace.Services, document3, onImportsChange: () => callCount++);
-            documents[document4.FilePath] = TestDocumentState.Create(Workspace.Services, document4, onImportsChange: () => callCount++);
-            documents[document5.FilePath] = TestDocumentState.Create(Workspace.Services, document5, onImportsChange: () => callCount++);
-
-            var importsToRelatedDocuments = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(FilePathComparer.Instance);
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectFile1.FilePath,
-                    TestProjectData.SomeProjectFile2.FilePath,
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath,
-                    TestProjectData.AnotherProjectNestedImportFile.FilePath));
-            importsToRelatedDocuments.Add(
-                TestProjectData.SomeProjectNestedImportFile.TargetPath,
-                ImmutableArray.Create(
-                    TestProjectData.SomeProjectNestedFile3.FilePath,
-                    TestProjectData.AnotherProjectNestedFile4.FilePath));
-
-            var original = ProjectState.Create(Workspace.Services, HostProject, ProjectWorkspaceState);
-            original.Documents = documents.ToImmutable();
-            original.ImportsToRelatedDocuments = importsToRelatedDocuments.ToImmutable();
-
-            // Act
-            var state = original.WithRemovedHostDocument(document5);
-
-            // Assert
-            Assert.NotEqual(original.Version, state.Version);
-            Assert.Equal(2, callCount);
-        }
-
-        private class TestDocumentState : DocumentState
-        {
-            public static TestDocumentState Create(
-                HostWorkspaceServices services,
-                HostDocument hostDocument,
-                Func<Task<TextAndVersion>> loader = null,
-                Action onTextChange = null,
-                Action onTextLoaderChange = null,
-                Action onConfigurationChange = null,
-                Action onImportsChange = null,
-                Action onProjectWorkspaceStateChange = null)
+                Assert.Equal(SomeProjectImportFile.TargetPath, kvp.Key);
+                Assert.Equal(
+                    [
+                        AnotherProjectNestedFile4.FilePath,
+                        SomeProjectFile1.FilePath,
+                        SomeProjectFile2.FilePath,
+                        SomeProjectNestedFile3.FilePath,
+                    ],
+                    kvp.Value.OrderBy(f => f));
+            },
+            kvp =>
             {
-                return new TestDocumentState(
-                    services,
-                    hostDocument,
-                    null,
-                    null,
-                    loader,
-                    onTextChange,
-                    onTextLoaderChange,
-                    onConfigurationChange,
-                    onImportsChange,
-                    onProjectWorkspaceStateChange);
-            }
+                Assert.Equal(SomeProjectNestedImportFile.TargetPath, kvp.Key);
+                Assert.Equal(
+                    [
+                        AnotherProjectNestedFile4.FilePath,
+                        SomeProjectNestedFile3.FilePath,
+                    ],
+                    kvp.Value.OrderBy(f => f));
+            });
+    }
 
-            private readonly Action _onTextChange;
-            private readonly Action _onTextLoaderChange;
-            private readonly Action _onConfigurationChange;
-            private readonly Action _onImportsChange;
-            private readonly Action _onProjectWorkspaceStateChange;
+    [Fact]
+    public void ProjectState_AddDocument_RetainsComputedState()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
 
-            private TestDocumentState(
-                HostWorkspaceServices services,
-                HostDocument hostDocument,
-                SourceText text,
-                VersionStamp? version,
-                Func<Task<TextAndVersion>> loader,
-                Action onTextChange,
-                Action onTextLoaderChange,
-                Action onConfigurationChange,
-                Action onImportsChange,
-                Action onProjectWorkspaceStateChange)
-                : base(services, hostDocument, text, version, loader)
+        // Act
+        var newState = state.AddEmptyDocument(SomeProjectFile1);
+
+        // Assert
+        Assert.Same(state.ProjectEngine, newState.ProjectEngine);
+        AssertSameTagHelpers(state.TagHelpers, newState.TagHelpers);
+        Assert.Same(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+        Assert.Same(state.Documents[AnotherProjectNestedFile3.FilePath], newState.Documents[AnotherProjectNestedFile3.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_AddDocument_DuplicateIgnored()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.AddEmptyDocument(new HostDocument(SomeProjectFile2.FilePath, "SomePath.cshtml"));
+
+        // Assert
+        Assert.Same(state, newState);
+    }
+
+    [Fact]
+    public async Task ProjectState_WithDocumentText_Loader()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithDocumentText(SomeProjectFile2.FilePath, s_textLoader);
+
+        // Assert
+        var text = await newState.Documents[SomeProjectFile2.FilePath].GetTextAsync(DisposalToken);
+        Assert.Same(s_text, text);
+    }
+
+    [Fact]
+    public async Task ProjectState_WithDocumentText_Snapshot()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithDocumentText(SomeProjectFile2.FilePath, s_text);
+
+        // Assert
+        var text = await newState.Documents[SomeProjectFile2.FilePath].GetTextAsync(DisposalToken);
+        Assert.Same(s_text, text);
+    }
+
+    [Fact]
+    public void ProjectState_WithDocumentText_Loader_RetainsComputedState()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithDocumentText(SomeProjectFile2.FilePath, s_textLoader);
+
+        // Assert
+        Assert.Same(state.ProjectEngine, newState.ProjectEngine);
+        AssertSameTagHelpers(state.TagHelpers, newState.TagHelpers);
+        Assert.NotSame(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_WithDocumentText_Snapshot_RetainsComputedState()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithDocumentText(SomeProjectFile2.FilePath, s_text);
+
+        // Assert
+        Assert.Same(state.ProjectEngine, newState.ProjectEngine);
+        AssertSameTagHelpers(state.TagHelpers, newState.TagHelpers);
+        Assert.NotSame(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_WithDocumentText_Loader_NotFoundIgnored()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithDocumentText(SomeProjectFile1.FilePath, s_textLoader);
+
+        // Assert
+        Assert.Same(state, newState);
+    }
+
+    [Fact]
+    public void ProjectState_WithDocumentText_Snapshot_NotFoundIgnored()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithDocumentText(SomeProjectFile1.FilePath, s_text);
+
+        // Assert
+        Assert.Same(state, newState);
+    }
+
+    [Fact]
+    public void ProjectState_RemoveDocument_FromProjectWithDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.RemoveDocument(SomeProjectFile2.FilePath);
+
+        // Assert
+        var documentState = Assert.Single(newState.Documents.Values);
+        Assert.Same(AnotherProjectNestedFile3, documentState.HostDocument);
+    }
+
+    [Fact]
+    public void ProjectState_RemoveDocument_TracksImports()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4);
+
+        // Act
+        var newState = state.RemoveDocument(SomeProjectNestedFile3.FilePath);
+
+        // Assert
+        Assert.Collection(
+            newState.ImportsToRelatedDocuments.OrderBy(kvp => kvp.Key),
+            kvp =>
             {
-                _onTextChange = onTextChange;
-                _onTextLoaderChange = onTextLoaderChange;
-                _onConfigurationChange = onConfigurationChange;
-                _onImportsChange = onImportsChange;
-                _onProjectWorkspaceStateChange = onProjectWorkspaceStateChange;
-            }
-
-            public override DocumentState WithText(SourceText sourceText, VersionStamp version)
+                Assert.Equal(SomeProjectImportFile.TargetPath, kvp.Key);
+                Assert.Equal(
+                    [
+                        AnotherProjectNestedFile4.FilePath,
+                        SomeProjectFile1.FilePath,
+                        SomeProjectFile2.FilePath,
+                    ],
+                    kvp.Value.OrderBy(f => f));
+            },
+            kvp =>
             {
-                _onTextChange?.Invoke();
-                return base.WithText(sourceText, version);
-            }
+                Assert.Equal(SomeProjectNestedImportFile.TargetPath, kvp.Key);
+                Assert.Equal(
+                    [
+                        AnotherProjectNestedFile4.FilePath,
+                    ],
+                    kvp.Value.OrderBy(f => f));
+            });
+    }
 
-            public override DocumentState WithTextLoader(Func<Task<TextAndVersion>> loader)
-            {
-                _onTextLoaderChange?.Invoke();
-                return base.WithTextLoader(loader);
-            }
+    [Fact]
+    public void ProjectState_RemoveDocument_TracksImports_RemoveAllDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4);
 
-            public override DocumentState WithConfigurationChange()
-            {
-                _onConfigurationChange?.Invoke();
-                return base.WithConfigurationChange();
-            }
+        // Act
+        var newState = state
+            .RemoveDocument(SomeProjectFile1.FilePath)
+            .RemoveDocument(SomeProjectFile2.FilePath)
+            .RemoveDocument(SomeProjectNestedFile3.FilePath)
+            .RemoveDocument(AnotherProjectNestedFile4.FilePath);
 
-            public override DocumentState WithImportsChange()
-            {
-                _onImportsChange?.Invoke();
-                return base.WithImportsChange();
-            }
+        // Assert
+        Assert.Empty(newState.Documents);
+        Assert.Empty(newState.ImportsToRelatedDocuments);
+    }
 
-            public override DocumentState WithProjectWorkspaceStateChange()
-            {
-                _onProjectWorkspaceStateChange?.Invoke();
-                return base.WithProjectWorkspaceStateChange();
-            }
+    [Fact]
+    public void ProjectState_RemoveDocument_RetainsComputedState()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.RemoveDocument(AnotherProjectNestedFile3.FilePath);
+
+        // Assert
+        Assert.Same(state.ProjectEngine, newState.ProjectEngine);
+        AssertSameTagHelpers(state.TagHelpers, newState.TagHelpers);
+        Assert.Same(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_RemoveDocument_NotFoundIgnored()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.RemoveDocument(SomeProjectFile1.FilePath);
+
+        // Assert
+        Assert.Same(state, newState);
+    }
+
+    [Fact]
+    public void ProjectState_WithHostProject_ConfigurationChange_UpdatesConfigurationState()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithHostProject(s_hostProject with { Configuration = FallbackRazorConfiguration.MVC_1_0 });
+
+        // Assert
+        Assert.Same(FallbackRazorConfiguration.MVC_1_0, newState.HostProject.Configuration);
+
+        Assert.NotSame(state.ProjectEngine, newState.ProjectEngine);
+        AssertSameTagHelpers(state.TagHelpers, newState.TagHelpers);
+
+        Assert.NotSame(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+        Assert.NotSame(state.Documents[AnotherProjectNestedFile3.FilePath], newState.Documents[AnotherProjectNestedFile3.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_WithHostProject_RootNamespaceChange_UpdatesConfigurationState()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithHostProject(s_hostProject with { RootNamespace = "ChangedRootNamespace" });
+
+        // Assert
+        Assert.NotSame(state, newState);
+        Assert.Equal("ChangedRootNamespace", newState.HostProject.RootNamespace);
+    }
+
+    [Fact]
+    public void ProjectState_WithHostProject_NoConfigurationChange_Ignored()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithHostProject(s_hostProject);
+
+        // Assert
+        Assert.Same(state, newState);
+    }
+
+    [Fact]
+    public void ProjectState_WithConfiguration_Change_UpdatesAllDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(AnotherProjectNestedFile3);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+
+        // Act
+        var newState = state.WithHostProject(s_hostProject with { Configuration = FallbackRazorConfiguration.MVC_1_0 });
+
+        // Assert
+        Assert.Equal(FallbackRazorConfiguration.MVC_1_0, newState.HostProject.Configuration);
+
+        // all documents were updated
+        foreach (var filePath in documentPathSet.ToArray())
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
         }
+
+        // no other documents - everything was a related document
+        Assert.Empty(documentPathSet);
+    }
+
+    [Fact]
+    public void ProjectState_WithConfiguration_Change_ResetsImportMap()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1);
+
+        // Act
+        var newState = state.WithHostProject(s_hostProject with { Configuration = FallbackRazorConfiguration.MVC_1_0 });
+
+        // Assert
+        var importMap = Assert.Single(newState.ImportsToRelatedDocuments);
+        var documentFilePath = Assert.Single(importMap.Value);
+        Assert.Equal(SomeProjectFile1.FilePath, documentFilePath);
+    }
+
+    [Fact]
+    public void ProjectState_WithProjectWorkspaceState_Changed()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        var newWorkspaceState = ProjectWorkspaceState.Create([]);
+
+        // Act
+        var newState = state.WithProjectWorkspaceState(newWorkspaceState);
+
+        // Assert
+        Assert.Same(newWorkspaceState, newState.ProjectWorkspaceState);
+
+        // The the tag helpers didn't change
+        Assert.Same(state.ProjectEngine, newState.ProjectEngine);
+
+        Assert.NotSame(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+        Assert.NotSame(state.Documents[AnotherProjectNestedFile3.FilePath], newState.Documents[AnotherProjectNestedFile3.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_WithProjectWorkspaceState_Changed_TagHelpersChanged()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithProjectWorkspaceState(ProjectWorkspaceState.Default);
+
+        // Assert
+        Assert.Same(ProjectWorkspaceState.Default, newState.ProjectWorkspaceState);
+
+        // The configuration didn't change, but the tag helpers did
+        Assert.Same(state.ProjectEngine, newState.ProjectEngine);
+        Assert.NotEqual(state.TagHelpers, newState.TagHelpers);
+        Assert.NotSame(state.Documents[SomeProjectFile2.FilePath], newState.Documents[SomeProjectFile2.FilePath]);
+        Assert.NotSame(state.Documents[AnotherProjectNestedFile3.FilePath], newState.Documents[AnotherProjectNestedFile3.FilePath]);
+    }
+
+    [Fact]
+    public void ProjectState_WithProjectWorkspaceState_IdenticalState_Caches()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(AnotherProjectNestedFile3)
+            .AddEmptyDocument(SomeProjectFile2);
+
+        // Act
+        var newState = state.WithProjectWorkspaceState(ProjectWorkspaceState.Create(state.TagHelpers));
+
+        // Assert
+        Assert.Same(state, newState);
+    }
+
+    [Fact]
+    public void ProjectState_WithProjectWorkspaceState_UpdatesAllDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(AnotherProjectNestedFile3);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+
+        // Act
+        var newState = state.WithProjectWorkspaceState(ProjectWorkspaceState.Default);
+
+        // Assert
+        Assert.NotEqual(state.ProjectWorkspaceState, newState.ProjectWorkspaceState);
+        Assert.Same(ProjectWorkspaceState.Default, newState.ProjectWorkspaceState);
+
+        // all documents were updated
+        foreach (var filePath in documentPathSet.ToArray())
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        // no other documents - everything was a related document
+        Assert.Empty(documentPathSet);
+    }
+
+    [Fact]
+    public void ProjectState_AddImportDocument_UpdatesRelatedDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+
+        // Act
+        var newState = state.AddEmptyDocument(AnotherProjectImportFile);
+
+        // Assert
+
+        // related documents were updated
+        var relatedDocumentPaths = newState.ImportsToRelatedDocuments[AnotherProjectImportFile.TargetPath];
+
+        foreach (var filePath in relatedDocumentPaths)
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        // no other documents - everything was a related document
+
+        Assert.Empty(documentPathSet);
+    }
+
+    [Fact]
+    public void ProjectState_AddImportDocument_UpdatesRelatedDocuments_Nested()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+
+        // Act
+        var newState = state.AddEmptyDocument(AnotherProjectNestedImportFile);
+
+        // Assert
+
+        // related documents were updated
+        var relatedDocumentPaths = newState.ImportsToRelatedDocuments[AnotherProjectNestedImportFile.TargetPath];
+
+        foreach (var filePath in relatedDocumentPaths)
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        // other documents were not updated
+        foreach (var filePath in documentPathSet.ToArray())
+        {
+            AssertDocumentNotUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        Assert.Empty(documentPathSet);
+    }
+
+    [Fact]
+    public void ProjectState_WithImportDocumentText_UpdatesRelatedDocuments_TextLoader()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4)
+            .AddEmptyDocument(AnotherProjectNestedImportFile);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+
+        // Act
+        var newState = state.WithDocumentText(AnotherProjectNestedImportFile.FilePath, s_textLoader);
+
+        // Assert
+
+        // document was updated
+        AssertDocumentUpdated(AnotherProjectNestedImportFile.FilePath, state, newState);
+        documentPathSet.Remove(AnotherProjectNestedImportFile.FilePath);
+
+        // related documents were updated
+        var relatedDocumentPaths = newState.ImportsToRelatedDocuments[AnotherProjectNestedImportFile.TargetPath];
+
+        foreach (var filePath in relatedDocumentPaths)
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        // other documents were not updated
+        foreach (var filePath in documentPathSet.ToArray())
+        {
+            AssertDocumentNotUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        Assert.Empty(documentPathSet);
+    }
+
+    [Fact]
+    public void ProjectState_WithImportDocumentText_UpdatesRelatedDocuments_Snapshot()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4)
+            .AddEmptyDocument(AnotherProjectNestedImportFile);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+
+        // Act
+        var newState = state.WithDocumentText(AnotherProjectNestedImportFile.FilePath, s_text);
+
+        // Assert
+
+        // document was updated
+        AssertDocumentUpdated(AnotherProjectNestedImportFile.FilePath, state, newState);
+        documentPathSet.Remove(AnotherProjectNestedImportFile.FilePath);
+
+        // related documents were updated
+        var relatedDocumentPaths = newState.ImportsToRelatedDocuments[AnotherProjectNestedImportFile.TargetPath];
+
+        foreach (var filePath in relatedDocumentPaths)
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        // other documents were not updated
+        foreach (var filePath in documentPathSet.ToArray())
+        {
+            AssertDocumentNotUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        Assert.Empty(documentPathSet);
+    }
+
+    [Fact]
+    public void ProjectState_RemoveImportDocument_UpdatesRelatedDocuments()
+    {
+        // Arrange
+        var state = ProjectState
+            .Create(s_hostProject, s_projectEngineFactoryProvider)
+            .WithProjectWorkspaceState(s_projectWorkspaceState)
+            .AddEmptyDocument(SomeProjectFile1)
+            .AddEmptyDocument(SomeProjectFile2)
+            .AddEmptyDocument(SomeProjectNestedFile3)
+            .AddEmptyDocument(AnotherProjectNestedFile4)
+            .AddEmptyDocument(AnotherProjectNestedImportFile);
+
+        var documentPathSet = state.Documents.Keys.ToHashSet(FilePathNormalizingComparer.Instance);
+        var relatedDocumentPaths = state.ImportsToRelatedDocuments[AnotherProjectNestedImportFile.TargetPath];
+
+        // Act
+        var newState = state.RemoveDocument(AnotherProjectNestedImportFile.FilePath);
+
+        // Assert
+
+        // document was removed
+        Assert.False(newState.Documents.ContainsKey(AnotherProjectNestedImportFile.FilePath));
+        // TODO: Fix this bug. newState.ImportsToRelatedDocuments should contain an import document after it's been removed.
+        Assert.True(newState.ImportsToRelatedDocuments.ContainsKey(AnotherProjectNestedImportFile.TargetPath));
+        documentPathSet.Remove(AnotherProjectNestedImportFile.FilePath);
+
+        // related documents were updated
+        foreach (var filePath in relatedDocumentPaths)
+        {
+            AssertDocumentUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        // other documents were not updated
+        foreach (var filePath in documentPathSet.ToArray())
+        {
+            AssertDocumentNotUpdated(filePath, state, newState);
+            documentPathSet.Remove(filePath);
+        }
+
+        Assert.Empty(documentPathSet);
+    }
+
+    private static void AssertSameTagHelpers(TagHelperCollection expected, TagHelperCollection actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+
+        for (var i = 0; i < expected.Count; i++)
+        {
+            Assert.Same(expected[i], actual[i]);
+        }
+    }
+
+    private static void AssertDocumentUpdated(string filePath, ProjectState oldState, ProjectState newState)
+    {
+        Assert.True(oldState.Documents.TryGetValue(filePath, out var document));
+        Assert.True(newState.Documents.TryGetValue(filePath, out var newDocument));
+
+        Assert.NotSame(document, newDocument);
+        Assert.Same(document.HostDocument, newDocument.HostDocument);
+        Assert.Equal(document.Version + 1, newDocument.Version);
+    }
+
+    private static void AssertDocumentNotUpdated(string filePath, ProjectState oldState, ProjectState newState)
+    {
+        Assert.True(oldState.Documents.TryGetValue(filePath, out var document));
+        Assert.True(newState.Documents.TryGetValue(filePath, out var newDocument));
+
+        Assert.Same(document, newDocument);
     }
 }

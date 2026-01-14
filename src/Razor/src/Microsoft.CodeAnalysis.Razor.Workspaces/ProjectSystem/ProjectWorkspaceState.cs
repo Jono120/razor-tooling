@@ -1,83 +1,43 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Internal;
-using Newtonsoft.Json;
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.CodeAnalysis.Razor.ProjectSystem;
+
+internal sealed class ProjectWorkspaceState : IEquatable<ProjectWorkspaceState>
 {
-    public sealed class ProjectWorkspaceState : IEquatable<ProjectWorkspaceState>
+    public static readonly ProjectWorkspaceState Default = new(TagHelperCollection.Empty);
+
+    public TagHelperCollection TagHelpers { get; }
+
+    public bool IsDefault => TagHelpers.IsEmpty;
+
+    private ProjectWorkspaceState(TagHelperCollection tagHelpers)
     {
-        public static readonly ProjectWorkspaceState Default = new ProjectWorkspaceState(Array.Empty<TagHelperDescriptor>(), LanguageVersion.Default);
+        TagHelpers = tagHelpers;
+    }
 
-        public ProjectWorkspaceState(
-            IReadOnlyCollection<TagHelperDescriptor> tagHelpers,
-            LanguageVersion csharpLanguageVersion)
-            : this ((tagHelpers as IReadOnlyList<TagHelperDescriptor>) ?? tagHelpers.ToList(), csharpLanguageVersion)
-        {
-        }
+    public static ProjectWorkspaceState Create(TagHelperCollection tagHelpers)
+        => tagHelpers.IsEmpty
+            ? Default
+            : new(tagHelpers);
 
-        [JsonConstructor]
-        public ProjectWorkspaceState(
-            IReadOnlyList<TagHelperDescriptor> tagHelpers,
-            LanguageVersion csharpLanguageVersion)
-        {
-            if (tagHelpers is null)
-            {
-                throw new ArgumentNullException(nameof(tagHelpers));
-            }
+    public override bool Equals(object? obj)
+        => obj is ProjectWorkspaceState other && Equals(other);
 
-            TagHelpers = tagHelpers;
-            CSharpLanguageVersion = csharpLanguageVersion;
-        }
+    public bool Equals(ProjectWorkspaceState? other)
+        => other is not null &&
+           TagHelpers.Equals(other.TagHelpers);
 
-        public IReadOnlyList<TagHelperDescriptor> TagHelpers { get; }
+    public override int GetHashCode()
+    {
+        var hash = HashCodeCombiner.Start();
 
-        public LanguageVersion CSharpLanguageVersion { get; }
+        hash.Add(TagHelpers);
 
-        public override bool Equals(object obj)
-        {
-            return base.Equals(obj as ProjectWorkspaceState);
-        }
-
-        public bool Equals(ProjectWorkspaceState other)
-        {
-            if (other is null)
-            {
-                return false;
-            }
-
-            if (!Enumerable.SequenceEqual(TagHelpers, other.TagHelpers))
-            {
-                return false;
-            }
-
-            if (CSharpLanguageVersion != other.CSharpLanguageVersion)
-            {
-                return false;
-            }
-
-            return true;
-        }
-
-        public override int GetHashCode()
-        {
-            var hash = new HashCodeCombiner();
-            for (var i = 0; i < TagHelpers.Count; i++)
-            {
-                hash.Add(TagHelpers[i].GetHashCode());
-            }
-
-            hash.Add(CSharpLanguageVersion);
-
-            return hash.CombinedHash;
-        }
+        return hash.CombinedHash;
     }
 }

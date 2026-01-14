@@ -1,24 +1,9 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
+namespace Microsoft.CodeAnalysis.Razor.Completion;
 
-using System;
-
-namespace Microsoft.CodeAnalysis.Razor.Completion
+internal sealed class DirectiveCompletionDescription(string description) : CompletionDescription
 {
-    internal class DirectiveCompletionDescription : CompletionDescription
-    {
-        public override string Description { get; }
-
-        public DirectiveCompletionDescription(string description)
-        {
-            if (description is null)
-            {
-                throw new ArgumentNullException(nameof(description));
-            }
-
-            Description = description;
-        }
-    }
+    public override string Description { get; } = description;
 }

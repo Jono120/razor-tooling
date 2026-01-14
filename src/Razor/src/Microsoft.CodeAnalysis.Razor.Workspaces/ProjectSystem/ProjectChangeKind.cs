@@ -1,17 +1,16 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.CodeAnalysis.Razor.ProjectSystem;
+
+internal enum ProjectChangeKind
 {
-    internal enum ProjectChangeKind
-    {
-        ProjectAdded,
-        ProjectRemoved,
-        ProjectChanged,
-        DocumentAdded,
-        DocumentRemoved,
+    ProjectAdded,
+    ProjectRemoved,
+    ProjectChanged,
+    DocumentAdded,
+    DocumentRemoved,
 
-        // This could be a state change (opened/closed) or a content change.
-        DocumentChanged,
-    }
+    // This could be a state change (opened/closed) or a content change.
+    DocumentChanged,
 }

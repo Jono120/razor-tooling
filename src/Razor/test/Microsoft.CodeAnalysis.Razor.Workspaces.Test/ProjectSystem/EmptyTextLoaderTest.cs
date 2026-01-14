@@ -1,29 +1,24 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Razor.Test.Common;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.CodeAnalysis.Razor.ProjectSystem;
+
+public class EmptyTextLoaderTest(ITestOutputHelper testOutput) : ToolingTestBase(testOutput)
 {
-    public class EmptyTextLoaderTest
+    [Fact, WorkItem("https://github.com/dotnet/aspnetcore/issues/7997")]
+    public async Task LoadAsync_SpecifiesEncoding()
     {
-        // See https://github.com/dotnet/aspnetcore/issues/7997
-        [Fact]
-        public async Task LoadAsync_SpecifiesEncoding()
-        {
-            // Arrange
-            var loader = new EmptyTextLoader("file.cshtml");
+        // Act
+        var textAndVersion = await EmptyTextLoader.Instance.LoadTextAndVersionAsync(options: default, DisposalToken);
 
-            // Act
-            var textAndVersion = await loader.LoadTextAndVersionAsync(default, default, default);
-
-            // Assert
-            Assert.True(textAndVersion.Text.CanBeEmbedded);
-            Assert.Same(Encoding.UTF8, textAndVersion.Text.Encoding);
-        }
+        // Assert
+        Assert.True(textAndVersion.Text.CanBeEmbedded);
+        Assert.Same(Encoding.UTF8, textAndVersion.Text.Encoding);
     }
 }

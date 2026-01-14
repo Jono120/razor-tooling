@@ -1,21 +1,21 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net472</TargetFramework>
+    <TargetFramework>$(NetFxVS)</TargetFramework>
     <PreserveCompilationContext>true</PreserveCompilationContext>
 
     <!-- The binding redirects are needed due to a conflict between the test host and Roslyn regarding System.Collections.Immutable -->
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <DefineConstants>$(DefineConstants);COHOSTING</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="..\Microsoft.CodeAnalysis.Razor.Workspaces.Test\Shared\**\*.cs">
       <Link>Shared\%(RecursiveDir)%(FileName)%(Extension)</Link>
     </Compile>
-    <Compile Include="..\Microsoft.VisualStudio.Editor.Razor.Test\Shared\**\*.cs">
-      <Link>Shared\%(RecursiveDir)%(FileName)%(Extension)</Link>
-    </Compile>
+
+    <Compile Include="..\Microsoft.VisualStudioCode.RazorExtension.Test\Endpoints\Shared\**\*.cs" LinkBase="Cohost\Shared" />
   </ItemGroup>
 
   <ItemGroup>
@@ -23,22 +23,28 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="WindowsBase" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <ProjectReference Include="..\..\src\Microsoft.CodeAnalysis.Remote.Razor\Microsoft.CodeAnalysis.Remote.Razor.csproj" />
     <ProjectReference Include="..\..\src\Microsoft.VisualStudio.LanguageServices.Razor\Microsoft.VisualStudio.LanguageServices.Razor.csproj" />
-    <ProjectReference Include="..\Microsoft.VisualStudio.Editor.Razor.Test.Common\Microsoft.VisualStudio.Editor.Razor.Test.Common.csproj" />
+    <ProjectReference Include="..\..\..\Compiler\Microsoft.CodeAnalysis.Razor.Compiler\src\Microsoft.CodeAnalysis.Razor.Compiler.csproj" />
+    <ProjectReference Include="..\Microsoft.AspNetCore.Razor.Test.Common.Cohosting\Microsoft.AspNetCore.Razor.Test.Common.Cohosting.csproj" />
+    <ProjectReference Include="..\Microsoft.AspNetCore.Razor.Test.Common.Tooling\Microsoft.AspNetCore.Razor.Test.Common.Tooling.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.Extensions.Tooling.Internal" Version="$(MicrosoftAspNetCoreMvcRazorExtensionsToolingInternalPackageVersion)" />
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Razor.Extensions.Version1_X.Internal.Transport" Version="$(MicrosoftAspNetCoreMvcRazorExtensionsVersion1_XInternalTransportPackageVersion)" />
-    <PackageReference Include="Moq" Version="$(MoqPackageVersion)" />
+    <EmbeddedResource Include="TestFiles\**\*" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Package changes to enable dev17 builds that have incoherent versions -->
-    <PackageReference Include="Microsoft.IO.Redist" Version="4.7.1" />
+    <Compile Include="..\..\src\Microsoft.CodeAnalysis.Razor.Workspaces\GlobalUsings.cs" Link="GlobalUsings.cs" />
+    <Compile Include="..\Microsoft.AspNetCore.Razor.LanguageServer.Test\Formatting_NetFx\DocumentFormattingTest.cs" Link="Cohost\Formatting\DocumentFormattingTest.cs" />
+    <Compile Include="..\Microsoft.AspNetCore.Razor.LanguageServer.Test\Formatting_NetFx\OnTypeFormattingTest.cs" Link="Cohost\Formatting\OnTypeFormattingTest.cs" />
+    <Compile Include="..\Microsoft.AspNetCore.Razor.LanguageServer.Test\XunitAssemblyInfo.cs" Link="XunitAssemblyInfo.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Cohost\TestSnippets.snippet">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

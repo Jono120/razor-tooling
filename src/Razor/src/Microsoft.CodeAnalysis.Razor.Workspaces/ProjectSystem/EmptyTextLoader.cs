@@ -1,31 +1,27 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.Text;
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.CodeAnalysis.Razor.ProjectSystem;
+
+internal sealed class EmptyTextLoader : TextLoader
 {
-    internal class EmptyTextLoader : TextLoader
+    private static readonly SourceText s_emptySourceText = SourceText.From(string.Empty, Encoding.UTF8);
+    private static readonly VersionStamp s_version = VersionStamp.Create();
+
+    public static TextLoader Instance { get; } = new EmptyTextLoader();
+
+    private EmptyTextLoader()
     {
-        private readonly string _filePath;
-        private readonly VersionStamp _version;
+    }
 
-        public EmptyTextLoader(string filePath)
-        {
-            _filePath = filePath;
-            _version = VersionStamp.Create(); // Version will never change so this can be reused.
-        }
-
-        public override Task<TextAndVersion> LoadTextAndVersionAsync(Workspace workspace, DocumentId documentId, CancellationToken cancellationToken)
-        {
-            // Providing an encoding here is important for debuggability. Without this edit-and-continue
-            // won't work for projects with Razor files.
-            return Task.FromResult(TextAndVersion.Create(SourceText.From("", Encoding.UTF8), _version, _filePath));
-        }
+    public override Task<TextAndVersion> LoadTextAndVersionAsync(LoadTextOptions options, CancellationToken cancellationToken)
+    {
+        var textAndVersion = TextAndVersion.Create(s_emptySourceText, s_version);
+        return Task.FromResult(textAndVersion);
     }
 }

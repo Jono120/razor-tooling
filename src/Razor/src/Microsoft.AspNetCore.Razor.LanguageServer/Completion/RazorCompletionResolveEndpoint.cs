@@ -1,79 +1,58 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-using System;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.LanguageServer.EndpointContracts;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Microsoft.CodeAnalysis.Razor.Completion;
+using Microsoft.CodeAnalysis.Razor.Protocol;
+using Microsoft.CodeAnalysis.Razor.Tooltip;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.Completion
+namespace Microsoft.AspNetCore.Razor.LanguageServer.Completion;
+
+[RazorLanguageServerEndpoint(Methods.TextDocumentCompletionResolveName)]
+internal class RazorCompletionResolveEndpoint(
+    AggregateCompletionItemResolver completionItemResolver,
+    CompletionListCache completionListCache,
+    IComponentAvailabilityService componentAvailabilityService,
+    IClientCapabilitiesService clientCapabilitiesService)
+    : IRazorRequestHandler<VSInternalCompletionItem, VSInternalCompletionItem>
 {
-    internal class RazorCompletionResolveEndpoint : IVSCompletionResolveEndpoint
+    private readonly AggregateCompletionItemResolver _completionItemResolver = completionItemResolver;
+    private readonly CompletionListCache _completionListCache = completionListCache;
+    private readonly IComponentAvailabilityService _componentAvailabilityService = componentAvailabilityService;
+    private readonly IClientCapabilitiesService _clientCapabilitiesService = clientCapabilitiesService;
+
+    public bool MutatesSolutionState => false;
+
+    public TextDocumentIdentifier GetTextDocumentIdentifier(VSInternalCompletionItem request)
     {
-        private readonly AggregateCompletionItemResolver _completionItemResolver;
-        private readonly CompletionListCache _completionListCache;
-        private VSInternalClientCapabilities? _clientCapabilities;
+        var context = RazorCompletionResolveData.Unwrap(request);
+        return context.TextDocument;
+    }
 
-        public RazorCompletionResolveEndpoint(
-            AggregateCompletionItemResolver completionItemResolver,
-            CompletionListCache completionListCache)
+    public async Task<VSInternalCompletionItem> HandleRequestAsync(VSInternalCompletionItem completionItem, RazorRequestContext requestContext, CancellationToken cancellationToken)
+    {
+        var data = RazorCompletionResolveData.Unwrap(completionItem);
+        completionItem.Data = data.OriginalData;
+
+        if (!_completionListCache.TryGetOriginalRequestData(completionItem, out var containingCompletionList, out var originalRequestContext))
         {
-            _completionItemResolver = completionItemResolver;
-            _completionListCache = completionListCache;
+            return completionItem;
         }
 
-        public RegistrationExtensionResult? GetRegistration(VSInternalClientCapabilities clientCapabilities)
-        {
-            _clientCapabilities = clientCapabilities;
-            return null;
-        }
-
-        public async Task<VSInternalCompletionItem> Handle(VSCompletionItemBridge completionItemBridge, CancellationToken cancellationToken)
-        {
-            VSInternalCompletionItem completionItem = completionItemBridge;
-
-            if (!completionItem.TryGetCompletionListResultIds(out var resultIds))
-            {
-                // Unable to lookup completion item result info
-                return completionItem;
-            }
-
-            object? originalRequestContext = null;
-            VSInternalCompletionList? containingCompletionlist = null;
-            foreach (var resultId in resultIds)
-            {
-                if (!_completionListCache.TryGet(resultId, out var cacheEntry))
-                {
-                    continue;
-                }
-
-                // See if this is the right completion list for this corresponding completion item. We cross-check this based on label only given that
-                // is what users interact with.
-                if (cacheEntry.CompletionList.Items.Any(completion => string.Equals(completionItem.Label, completion.Label, StringComparison.Ordinal)))
-                {
-                    originalRequestContext = cacheEntry.Context;
-                    containingCompletionlist = cacheEntry.CompletionList;
-                    break;
-                }
-            }
-
-            if (containingCompletionlist is null)
-            {
-                // Couldn't find an assocaited completion list
-                return completionItem;
-            }
-
-            var resolvedCompletionItem = await _completionItemResolver.ResolveAsync(
+        var resolvedCompletionItem = await _completionItemResolver
+            .ResolveAsync(
                 completionItem,
-                containingCompletionlist,
+                containingCompletionList,
                 originalRequestContext,
-                _clientCapabilities,
-                cancellationToken).ConfigureAwait(false);
-            resolvedCompletionItem ??= completionItem;
+                _clientCapabilitiesService.ClientCapabilities,
+                _componentAvailabilityService,
+                cancellationToken)
+            .ConfigureAwait(false);
 
-            return resolvedCompletionItem;
-        }
+        resolvedCompletionItem ??= completionItem;
+
+        return resolvedCompletionItem;
     }
 }

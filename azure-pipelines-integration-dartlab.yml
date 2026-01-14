@@ -1,4 +1,4 @@
-# Razor integration test pipeline for validating against branch builds of VS.
+﻿# Razor integration test pipeline for validating against branch builds of VS.
 
 trigger: none # Manual trigger for now
 pr: none
@@ -15,11 +15,11 @@ resources:
   - repository: DartLabTemplates
     type: git
     name: DartLab.Templates
-    ref: refs/heads/dev/bradwhit/RemoveCheckoutNone
+    ref: main
   - repository: RazorMirror
-    endpoint: dnceng/internal dotnet-razor-tooling
+    endpoint: dnceng/internal
     type: git
-    name: internal/dotnet-razor-tooling
+    name: internal/dotnet-razor
     ref: $(Build.SourceBranch)
     trigger:
     - main
@@ -27,6 +27,16 @@ resources:
 variables:
 - name: XUNIT_LOGS
   value: $(Build.SourcesDirectory)\artifacts\log\$(_configuration)
+- name: __VSNeverShowWhatsNew
+  value: 1
+- name: LogLevel
+  value: 'All'
+- name: Codeql.Enabled
+  value: false
+- name: Codeql.SkipTaskAutoInjection
+  value: true
+- name: _IntegrationTestsRunningInCI
+  value: true
 
 stages:
 - template: \stages\visual-studio\agent.yml@DartLabTemplates

@@ -1,25 +1,32 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
+using Microsoft.CodeAnalysis.Razor.Protocol;
 
-using Microsoft.CodeAnalysis.Text;
+namespace Microsoft.CodeAnalysis.Text;
 
-namespace Microsoft.CodeAnalysis.Razor.Workspaces.Extensions
+internal static class TextSpanExtensions
 {
-    internal static class TextSpanExtensions
+    internal static TextSpan TrimLeadingWhitespace(this TextSpan span, SourceText text)
     {
-        internal static TextSpan TrimLeadingWhitespace(this TextSpan span, SourceText text)
+        for (var i = 0; i < span.Length; ++i)
         {
-            for (var i = 0; i < span.Length; ++i)
+            if (!char.IsWhiteSpace(text[span.Start + i]))
             {
-                if (!char.IsWhiteSpace(text[span.Start + i]))
-                {
-                    return new TextSpan(span.Start + i, span.Length - i);
-                }
+                return new TextSpan(span.Start + i, span.Length - i);
             }
-
-            return span;
         }
+
+        return span;
+    }
+
+    internal static RazorTextSpan ToRazorTextSpan(this TextSpan span)
+    {
+        return new RazorTextSpan()
+        {
+            Start = span.Start,
+            Length = span.Length
+        };
     }
 }
+

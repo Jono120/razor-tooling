@@ -1,23 +1,19 @@
-# See here for image contents: https://github.com/microsoft/vscode-dev-containers/tree/v0.154.0/containers/dotnet/.devcontainer/base.Dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:8.0
 
-# [Choice] .NET version: 5.0, 3.1, 2.1
-ARG VARIANT="5.0"
-FROM mcr.microsoft.com/vscode/devcontainers/dotnetcore:0-${VARIANT}
+ARG DOTNET_SDK_INSTALL_URL=https://dot.net/v1/dotnet-install.sh
+# Install the correct Roslyn SDK into the same directory that the base image installs the SDK in.
+ENV DOTNET_INSTALL_DIR=/usr/share/dotnet
 
-# [Option] Install Node.js
-ARG INSTALL_NODE="true"
-ARG NODE_VERSION="lts/*"
-RUN if [ "${INSTALL_NODE}" = "true" ]; then su vscode -c "source /usr/local/share/nvm/nvm.sh && nvm install ${NODE_VERSION} 2>&1"; fi
+# Copy the global.json file so its available in the image before the repo is cloned
+COPY global.json /tmp/
 
-# [Option] Install Azure CLI
-ARG INSTALL_AZURE_CLI="false"
-COPY library-scripts/azcli-debian.sh /tmp/library-scripts/
-RUN if [ "$INSTALL_AZURE_CLI" = "true" ]; then bash /tmp/library-scripts/azcli-debian.sh; fi \
-    && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/library-scripts
+RUN cd /tmp \
+  && curl --location --output dotnet-install.sh "${DOTNET_SDK_INSTALL_URL}" \
+  && chmod +x dotnet-install.sh \
+  && mkdir -p "${DOTNET_INSTALL_DIR}" \
+  && ./dotnet-install.sh --jsonfile "./global.json" --install-dir "${DOTNET_INSTALL_DIR}" \
+  && rm dotnet-install.sh
 
-# [Optional] Uncomment this section to install additional OS packages.
-# RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-#     && apt-get -y install --no-install-recommends <your-package-list-here>
-
-# [Optional] Uncomment this line to install global node packages.
-# RUN su vscode -c "source /usr/local/share/nvm/nvm.sh && npm install -g <your-package-here>" 2>&1
+# Set up machine requirements to build the repo
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get -y install --no-install-recommends curl git

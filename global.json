@@ -1,25 +1,27 @@
 {
   "tools": {
-    "dotnet": "7.0.100-preview.5.22307.18",
+    "dotnet": "10.0.101",
     "runtimes": {
       "dotnet": [
-        "2.1.11",
-        "$(MicrosoftNETCoreBrowserDebugHostTransportPackageVersion)",
-        "3.1.0"
+        "2.1.30",
+        "3.1.30",
+        "8.0.7"
       ]
     },
     "vs": {
-      "version": "16.3",
+      "version": "17.2",
       "components": [
         "Microsoft.VisualStudio.Component.VSSDK"
       ]
     }
   },
   "sdk": {
-    "version": "7.0.100-preview.5.22307.18"
+    "version": "10.0.101",
+    "allowPrerelease": false,
+    "rollForward": "latestPatch"
   },
   "msbuild-sdks": {
-    "Microsoft.DotNet.Arcade.Sdk": "7.0.0-beta.22411.2",
-    "Yarn.MSBuild": "1.22.10"
+    "Microsoft.DotNet.Arcade.Sdk": "10.0.0-beta.26062.3",
+    "Microsoft.Build.NoTargets": "3.7.0"
   }
 }

@@ -1,34 +1,24 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.VisualStudio.ProjectSystem;
-using Microsoft.VisualStudio.ProjectSystem.References;
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.VisualStudio.Razor.ProjectSystem;
+
+// This defines the set of services that we frequently need for working with UnconfiguredProject.
+//
+// We're following a somewhat common pattern for code that uses CPS. It's really easy to end up
+// relying on service location inside CPS, which can be hard to test. This approach makes it easy
+// for us to build reusable mocks instead.
+internal interface IUnconfiguredProjectCommonServices
 {
-    // This defines the set of services that we frequently need for working with UnconfiguredProject.
-    //
-    // We're following a somewhat common pattern for code that uses CPS. It's really easy to end up
-    // relying on service location inside CPS, which can be hard to test. This approach makes it easy
-    // for us to build reusable mocks instead.
-    internal interface IUnconfiguredProjectCommonServices
-    {
-        ConfiguredProject ActiveConfiguredProject { get; }
+    IProjectAsynchronousTasksService TasksService { get; }
 
-        IAssemblyReferencesService ActiveConfiguredProjectAssemblyReferences { get; }
+    IProjectThreadingService ThreadingService { get; }
 
-        IPackageReferencesService ActiveConfiguredProjectPackageReferences { get; }
+    UnconfiguredProject UnconfiguredProject { get; }
 
-        Rules.RazorProjectProperties ActiveConfiguredProjectRazorProperties { get; }
+    IProjectFaultHandlerService FaultHandlerService { get; }
 
-        IActiveConfiguredProjectSubscriptionService ActiveConfiguredProjectSubscription { get; }
-
-        IProjectAsynchronousTasksService TasksService { get; }
-
-        IProjectThreadingService ThreadingService { get; }
-
-        UnconfiguredProject UnconfiguredProject { get; }
-    }
+    IActiveConfigurationGroupSubscriptionService ActiveConfigurationGroupSubscriptionService { get; }
 }

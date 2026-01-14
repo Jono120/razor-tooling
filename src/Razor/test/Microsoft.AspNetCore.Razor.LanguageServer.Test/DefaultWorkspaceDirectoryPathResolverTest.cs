@@ -1,56 +1,59 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
-
-using Moq;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using DocumentUri = OmniSharp.Extensions.LanguageServer.Protocol.DocumentUri;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Razor.Test.Common;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer
+namespace Microsoft.AspNetCore.Razor.LanguageServer;
+
+public class DefaultWorkspaceDirectoryPathResolverTest(ITestOutputHelper testOutput) : ToolingTestBase(testOutput)
 {
-    public class DefaultWorkspaceDirectoryPathResolverTest
+    [Fact]
+    public async Task Resolve_RootUriUnavailable_UsesRootPath()
     {
-        [Fact]
-        public void Resolve_RootUriUnavailable_UsesRootPath()
+        // Arrange
+        var expectedWorkspaceDirectory = "/testpath";
+#pragma warning disable CS0618 // Type or member is obsolete
+        var initializeParams = new InitializeParams()
         {
-            // Arrange
-            var expectedWorkspaceDirectory = "/testpath";
-            var clientSettings = new InitializeParams()
-            {
-                RootPath = expectedWorkspaceDirectory
-            };
-            var server = Mock.Of<IClientLanguageServer>(server => server.ClientSettings == clientSettings, MockBehavior.Strict);
-            var workspaceDirectoryPathResolver = new DefaultWorkspaceDirectoryPathResolver(server);
+            RootPath = expectedWorkspaceDirectory
+        };
+#pragma warning restore CS0618 // Type or member is obsolete
 
-            // Act
-            var workspaceDirectoryPath = workspaceDirectoryPathResolver.Resolve();
+        var capabilitiesManager = new CapabilitiesManager(LspServices.Empty);
+        capabilitiesManager.SetInitializeParams(initializeParams);
 
-            // Assert
-            Assert.Equal(expectedWorkspaceDirectory, workspaceDirectoryPath);
-        }
+        // Act
+        var workspaceDirectoryPath = await capabilitiesManager.GetRootPathAsync(DisposalToken);
 
-        [Fact]
-        public void Resolve_RootUriPrefered()
+        // Assert
+        Assert.Equal(expectedWorkspaceDirectory, workspaceDirectoryPath);
+    }
+
+    [Fact]
+    public async Task Resolve_RootUriPrefered()
+    {
+        // Arrange
+        var initialWorkspaceDirectory = "C:\\testpath";
+
+#pragma warning disable CS0618 // Type or member is obsolete
+        var initializeParams = new InitializeParams()
         {
-            // Arrange
-            var initialWorkspaceDirectory = "\\\\testpath";
-            var clientSettings = new InitializeParams()
-            {
-                RootPath = "/somethingelse",
-                RootUri = new DocumentUri("file", authority: null, path: initialWorkspaceDirectory, query: null, fragment: null),
-            };
-            var server = Mock.Of<IClientLanguageServer>(server => server.ClientSettings == clientSettings, MockBehavior.Strict);
-            var workspaceDirectoryPathResolver = new DefaultWorkspaceDirectoryPathResolver(server);
+            RootPath = "/somethingelse",
+            RootUri = LspFactory.CreateFilePathUri(initialWorkspaceDirectory),
+        };
+#pragma warning restore CS0618 // Type or member is obsolete
 
-            // Act
-            var workspaceDirectoryPath = workspaceDirectoryPathResolver.Resolve();
+        var capabilitiesManager = new CapabilitiesManager(LspServices.Empty);
+        capabilitiesManager.SetInitializeParams(initializeParams);
 
-            // Assert
-            var expectedWorkspaceDirectory = "/"+initialWorkspaceDirectory;
-            Assert.Equal(expectedWorkspaceDirectory, workspaceDirectoryPath);
-        }
+        // Act
+        var workspaceDirectoryPath = await capabilitiesManager.GetRootPathAsync(DisposalToken);
+
+        // Assert
+        var expectedWorkspaceDirectory = "C:/testpath";
+        Assert.Equal(expectedWorkspaceDirectory, workspaceDirectoryPath);
     }
 }

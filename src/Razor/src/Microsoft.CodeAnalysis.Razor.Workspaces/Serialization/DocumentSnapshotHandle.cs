@@ -1,43 +1,8 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
+using Microsoft.AspNetCore.Razor.Language;
 
-using System;
+namespace Microsoft.CodeAnalysis.Razor.Serialization;
 
-namespace Microsoft.CodeAnalysis.Razor.Workspaces.Serialization
-{
-    internal sealed class DocumentSnapshotHandle
-    {
-        public DocumentSnapshotHandle(
-            string filePath,
-            string targetPath,
-            string fileKind)
-        {
-            if (filePath is null)
-            {
-                throw new ArgumentNullException(nameof(filePath));
-            }
-
-            if (targetPath is null)
-            {
-                throw new ArgumentNullException(nameof(targetPath));
-            }
-
-            if (fileKind is null)
-            {
-                throw new ArgumentNullException(nameof(fileKind));
-            }
-
-            FilePath = filePath;
-            TargetPath = targetPath;
-            FileKind = fileKind;
-        }
-
-        public string FilePath { get; }
-
-        public string TargetPath { get; }
-
-        public string FileKind { get; }
-    }
-}
+internal record DocumentSnapshotHandle(string FilePath, string TargetPath, RazorFileKind FileKind);

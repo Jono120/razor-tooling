@@ -1,50 +1,42 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.CodeAnalysis.Razor;
 using Microsoft.CodeAnalysis.Razor.ProjectSystem;
-using Microsoft.CodeAnalysis.Razor.Workspaces.Extensions;
+using Microsoft.CodeAnalysis.Razor.Workspaces;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer
+namespace Microsoft.AspNetCore.Razor.LanguageServer;
+
+internal class GeneratedDocumentSynchronizer(
+    IGeneratedDocumentPublisher publisher,
+    ProjectSnapshotManager projectManager) : IDocumentProcessedListener
 {
-    internal class GeneratedDocumentSynchronizer : DocumentProcessedListener
+    private readonly IGeneratedDocumentPublisher _publisher = publisher;
+    private readonly ProjectSnapshotManager _projectManager = projectManager;
+
+    public void DocumentProcessed(RazorCodeDocument codeDocument, DocumentSnapshot document)
     {
-        private readonly GeneratedDocumentPublisher _publisher;
-        private readonly DocumentVersionCache _documentVersionCache;
-        private readonly ProjectSnapshotManagerDispatcher _dispatcher;
+        var hostDocumentVersion = document.Version;
+        var filePath = document.FilePath;
 
-        public GeneratedDocumentSynchronizer(
-            GeneratedDocumentPublisher publisher,
-            DocumentVersionCache documentVersionCache,
-            ProjectSnapshotManagerDispatcher dispatcher)
+        // If the document isn't open then we don't need to do anything.
+        if (!_projectManager.IsDocumentOpen(filePath))
         {
-            _publisher = publisher;
-            _documentVersionCache = documentVersionCache;
-            _dispatcher = dispatcher;
+            return;
         }
 
-        public override void Initialize(ProjectSnapshotManager projectManager)
+        // If the document has been removed from the project, then don't do anything, or version numbers will be thrown off
+        if (!_projectManager.ContainsDocument(document.Project.Key, filePath))
         {
+            return;
         }
 
-        public override void DocumentProcessed(RazorCodeDocument codeDocument, DocumentSnapshot document)
-        {
-            _dispatcher.AssertDispatcherThread();
+        var htmlText = codeDocument.GetHtmlSourceText(cancellationToken: System.Threading.CancellationToken.None);
 
-            if (!_documentVersionCache.TryGetDocumentVersion(document, out var hostDocumentVersion))
-            {
-                // Could not resolve document version
-                return;
-            }
+        _publisher.PublishHtml(document.Project.Key, filePath, htmlText, hostDocumentVersion);
 
-            var htmlText = codeDocument.GetHtmlSourceText();
+        var csharpText = codeDocument.GetCSharpSourceText();
 
-            _publisher.PublishHtml(document.FilePath, htmlText, hostDocumentVersion.Value);
-
-            var csharpText = codeDocument.GetCSharpSourceText();
-
-            _publisher.PublishCSharp(document.FilePath, csharpText, hostDocumentVersion.Value);
-        }
+        _publisher.PublishCSharp(document.Project.Key, filePath, csharpText, hostDocumentVersion);
     }
 }

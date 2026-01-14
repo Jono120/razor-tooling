@@ -1,27 +1,23 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 #nullable disable
 
-using System.IO;
 using System.Linq;
-using Microsoft.AspNetCore.Razor.LanguageServer.Serialization;
-using Newtonsoft.Json;
-using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Serialization;
+using System.Text.Json;
 using Xunit;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.Refactoring.Test
+namespace Microsoft.AspNetCore.Razor.LanguageServer.Serialization;
+
+public class PlatformAgnosticClientCapabilitiesJsonConverterTest
 {
-    public class PlatformAgnosticClientCapabilitiesJsonConverterTest
+    [Fact]
+    public void ReadJson_ReadsValues()
     {
-        [Fact]
-        public void ReadJson_ReadsValues()
-        {
-            // Arrange
-            // Note this is a small subset of the actual ClientCapabilities provided
-            // for use in basic validations.
-            var rawJson = @"{
+        // Arrange
+        // Note this is a small subset of the actual ClientCapabilities provided
+        // for use in basic validations.
+        var rawJson = @"{
   ""workspace"": {
     ""applyEdit"": true,
     ""workspaceEdit"": {
@@ -78,19 +74,15 @@ namespace Microsoft.AspNetCore.Razor.LanguageServer.Refactoring.Test
     }
   }
 }";
-            var stringReader = new StringReader(rawJson);
-            var serializer = new LspSerializer();
-            serializer.RegisterRazorConverters();
 
-            // Act
-            var capabilities = serializer.JsonSerializer.Deserialize<PlatformAgnosticClientCapabilities>(new JsonTextReader(stringReader));
+        // Act
+        var capabilities = JsonSerializer.Deserialize<VSInternalClientCapabilities>(rawJson);
 
-            // Assert
-            Assert.True(capabilities.Workspace.ApplyEdit);
-            Assert.Equal(MarkupKind.PlainText, capabilities.TextDocument.Hover.Value.ContentFormat.First());
-            Assert.Equal(CompletionItemKind.Function, capabilities.TextDocument.Completion.Value.CompletionItemKind.ValueSet.First());
-            Assert.Equal(MarkupKind.PlainText, capabilities.TextDocument.SignatureHelp.Value.SignatureInformation.DocumentationFormat.First());
-            Assert.Equal(CodeActionKind.RefactorExtract, capabilities.TextDocument.CodeAction.Value.CodeActionLiteralSupport.CodeActionKind.ValueSet.First());
-        }
+        // Assert
+        Assert.True(capabilities.Workspace.ApplyEdit);
+        Assert.Equal(MarkupKind.PlainText, capabilities.TextDocument.Hover.ContentFormat.First());
+        Assert.Equal(CompletionItemKind.Function, capabilities.TextDocument.Completion.CompletionItemKind.ValueSet.First());
+        Assert.Equal(MarkupKind.PlainText, capabilities.TextDocument.SignatureHelp.SignatureInformation.DocumentationFormat.First());
+        Assert.Equal(CodeActionKind.RefactorExtract, capabilities.TextDocument.CodeAction.CodeActionLiteralSupport.CodeActionKind.ValueSet.First());
     }
 }

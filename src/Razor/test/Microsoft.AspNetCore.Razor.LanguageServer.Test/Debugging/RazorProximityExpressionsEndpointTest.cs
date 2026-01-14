@@ -1,146 +1,131 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common.Extensions;
-using Microsoft.AspNetCore.Razor.LanguageServer.Debugging;
-using Microsoft.AspNetCore.Razor.LanguageServer.EndpointContracts.Debugging;
-using Microsoft.AspNetCore.Razor.LanguageServer.Test.Common;
-using Microsoft.AspNetCore.Razor.Test.Common;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Microsoft.AspNetCore.Razor.Test.Common.LanguageServer;
+using Microsoft.CodeAnalysis.Razor.DocumentMapping;
+using Microsoft.CodeAnalysis.Razor.Protocol.Debugging;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.Test.Debugging
+namespace Microsoft.AspNetCore.Razor.LanguageServer.Debugging;
+
+public class RazorProximityExpressionsEndpointTest : LanguageServerTestBase
 {
-    public class RazorProximityExpressionsEndpointTest : LanguageServerTestBase
+    private readonly IDocumentMappingService _mappingService;
+
+    public RazorProximityExpressionsEndpointTest(ITestOutputHelper testOutput)
+        : base(testOutput)
     {
-        public RazorProximityExpressionsEndpointTest()
-        {
-            MappingService = new DefaultRazorDocumentMappingService(TestLanguageServerFeatureOptions.Instance, new TestDocumentContextFactory(), LoggerFactory);
-        }
+        _mappingService = new LspDocumentMappingService(
+            FilePathService,
+            new TestDocumentContextFactory(),
+            LoggerFactory);
+    }
 
-        private RazorDocumentMappingService MappingService { get; }
-
-        [Fact]
-        public async Task Handle_UnsupportedDocument_ReturnsNull()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
-<p>@DateTime.Now</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-
-            var diagnosticsEndpoint = new RazorProximityExpressionsEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorProximityExpressionsParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0),
-            };
-            codeDocument.SetUnsupported();
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        [Fact]
-        public async Task Handle_ReturnsValidExpressions()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+    [Fact]
+    public async Task Handle_ReturnsValidExpressions()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p>@{var abc = 123;}</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var endpoint = new RazorProximityExpressionsEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorProximityExpressionsParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 8),
-            };
-
-            // Act
-            var response = await Task.Run(() => endpoint.Handle(request, default));
-
-            // Assert
-            Assert.Contains("abc", response!.Expressions);
-            Assert.Contains("this", response!.Expressions);
-        }
-
-        [Fact]
-        public async Task Handle_StartsInHtml_ReturnsValidExpressions()
+        var endpoint = new RazorProximityExpressionsEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorProximityExpressionsParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 8),
+            HostDocumentSyncVersion = 1,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await endpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Contains("abc", response!.Expressions);
+        Assert.Contains("this", response!.Expressions);
+    }
+
+    [Fact]
+    public async Task Handle_StartsInHtml_ReturnsValidExpressions()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p>@{var abc = 123;}</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var endpoint = new RazorProximityExpressionsEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorProximityExpressionsParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0),
-            };
-
-            // Act
-            var response = await Task.Run(() => endpoint.Handle(request, default));
-
-            // Assert
-            Assert.Contains("abc", response!.Expressions);
-            Assert.Contains("this", response!.Expressions);
-        }
-
-        [Fact]
-        public async Task Handle_StartInHtml_NoCSharpOnLine_ReturnsNull()
+        var endpoint = new RazorProximityExpressionsEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorProximityExpressionsParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 1,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await endpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Contains("abc", response!.Expressions);
+        Assert.Contains("this", response!.Expressions);
+    }
+
+    [Fact]
+    public async Task Handle_StartInHtml_NoCSharpOnLine_ReturnsNull()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p></p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorProximityExpressionsEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorProximityExpressionsParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0),
-            };
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        [Fact]
-        public async Task Handle_InvalidLocation_ReturnsNull()
+        var diagnosticsEndpoint = new RazorProximityExpressionsEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorProximityExpressionsParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 0,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public async Task Handle_InvalidLocation_ReturnsNull()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p>@{
 
     var abc = 123;
 }</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorProximityExpressionsEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorProximityExpressionsParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(0, 0),
-            };
+        var diagnosticsEndpoint = new RazorProximityExpressionsEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorProximityExpressionsParams()
+        {
+            Uri = documentPath,
+            Position = LspFactory.DefaultPosition,
+            HostDocumentSyncVersion = 0,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Assert
-            Assert.Null(response);
-        }
+        // Assert
+        Assert.Null(response);
     }
 }

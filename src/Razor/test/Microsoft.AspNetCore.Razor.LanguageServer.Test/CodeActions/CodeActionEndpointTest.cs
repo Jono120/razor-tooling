@@ -1,808 +1,676 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.LanguageServer.CodeActions.Models;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common.Extensions;
-using Microsoft.AspNetCore.Razor.LanguageServer.EndpointContracts;
-using Microsoft.AspNetCore.Razor.LanguageServer.Extensions;
+using Microsoft.AspNetCore.Razor.LanguageServer.Hosting;
 using Microsoft.AspNetCore.Razor.Test.Common;
+using Microsoft.AspNetCore.Razor.Test.Common.LanguageServer;
+using Microsoft.CodeAnalysis.Razor.CodeActions;
+using Microsoft.CodeAnalysis.Razor.CodeActions.Models;
+using Microsoft.CodeAnalysis.Razor.DocumentMapping;
+using Microsoft.CodeAnalysis.Razor.Protocol;
+using Microsoft.CodeAnalysis.Razor.Protocol.CodeActions;
+using Microsoft.CodeAnalysis.Razor.Telemetry;
 using Microsoft.CodeAnalysis.Razor.Workspaces;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Microsoft.CodeAnalysis.Text;
 using Moq;
-using Newtonsoft.Json.Linq;
-using OmniSharp.Extensions.JsonRpc;
 using Xunit;
-using Range = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.CodeActions
+namespace Microsoft.AspNetCore.Razor.LanguageServer.CodeActions;
+
+public class CodeActionEndpointTest(ITestOutputHelper testOutput) : LanguageServerTestBase(testOutput)
 {
-    public class CodeActionEndpointTest : LanguageServerTestBase
+    private static readonly LinePositionSpan s_defaultRange = new(new(5, 2), new(5, 2));
+
+    [Fact]
+    public async Task Handle_NoDocument()
     {
-        private readonly RazorDocumentMappingService _documentMappingService = Mock.Of<RazorDocumentMappingService>(s => s.TryMapToProjectedDocumentRange(It.IsAny<RazorCodeDocument>(), It.IsAny<Range>(), out It.Ref<Range>.IsAny) == false, MockBehavior.Strict);
-        private readonly DocumentContextFactory _emptyDocumentContextFactory = Mock.Of<DocumentContextFactory>(r => r.TryCreateAsync(It.IsAny<Uri>(), It.IsAny<CancellationToken>()) == Task.FromResult<DocumentContext>(null), MockBehavior.Strict);
-        private readonly LanguageServerFeatureOptions _languageServerFeatureOptions = Mock.Of<LanguageServerFeatureOptions>(l => l.SupportsFileManipulation == true, MockBehavior.Strict);
-        private readonly ClientNotifierServiceBase _languageServer = Mock.Of<ClientNotifierServiceBase>(MockBehavior.Strict);
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeActionEndpoint = CreateEndpoint();
 
-        [Fact]
-        public async Task Handle_NoDocument()
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                Array.Empty<RazorCodeActionProvider>(),
-                Array.Empty<CSharpCodeActionProvider>(),
-                _emptyDocumentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new CodeActionContext()
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        var requestContext = CreateRazorRequestContext(documentContext: null);
 
-            // Assert
-            Assert.Null(commandOrCodeActionContainer);
-        }
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-        [Fact]
-        public async Task Handle_UnsupportedDocument()
+        // Assert
+        Assert.Null(commandOrCodeActionContainer);
+    }
+
+    [Fact]
+    public async Task Handle_NoProviders()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+        var codeActionEndpoint = CreateEndpoint();
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            codeDocument.SetUnsupported();
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                Array.Empty<RazorCodeActionProvider>(),
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Assert
-            Assert.Null(commandOrCodeActionContainer);
-        }
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-        [Fact]
-        public async Task Handle_NoProviders()
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Empty(commandOrCodeActionContainer);
+    }
+
+    [Fact]
+    public async Task Handle_OneRazorCodeActionProvider()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+        var codeActionEndpoint = CreateEndpoint(razorCodeActionProviders: [CreateRazorCodeActionProvider()]);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                Array.Empty<RazorCodeActionProvider>(),
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Assert
-            Assert.Null(commandOrCodeActionContainer);
-        }
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-        [Fact]
-        public async Task Handle_OneRazorCodeActionProvider()
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Single(commandOrCodeActionContainer);
+    }
+
+    [Fact]
+    public async Task Handle_OneCSharpCodeActionProvider()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var codeActionEndpoint = CreateEndpoint(
+            documentMappingService: CreateDocumentMappingService(s_defaultRange),
+            csharpCodeActionProviders: [CreateCSharpCodeActionProvider()],
+            clientConnection: TestClientConnection.Instance);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider()
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Assert
-            Assert.Single(commandOrCodeActionContainer);
-        }
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Single(commandOrCodeActionContainer);
+    }
 
-        [Fact]
-        public async Task Handle_OneCSharpCodeActionProvider()
+    [Fact]
+    public async Task Handle_OneCodeActionProviderWithMultipleCodeActions()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+        var codeActionEndpoint = CreateEndpoint(razorCodeActionProviders: [CreateMultipleRazorCodeActionProvider()]);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var documentMappingService = CreateDocumentMappingService();
-            var languageServer = CreateLanguageServer();
-            var codeActionEndpoint = new CodeActionEndpoint(
-                documentMappingService,
-                Array.Empty<RazorCodeActionProvider>(),
-                new CSharpCodeActionProvider[] {
-                    new MockCSharpCodeActionProvider()
-                },
-                documentContextFactory,
-                languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Assert
-            Assert.Single(commandOrCodeActionContainer);
-        }
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Equal(2, commandOrCodeActionContainer.Length);
+    }
 
-        [Fact]
-        public async Task Handle_OneCodeActionProviderWithMultipleCodeActions()
+    [Fact]
+    public async Task Handle_MultipleCodeActionProvidersWithMultipleCodeActions()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var codeActionEndpoint = CreateEndpoint(
+            documentMappingService: CreateDocumentMappingService(s_defaultRange),
+            razorCodeActionProviders: [
+                CreateMultipleRazorCodeActionProvider(),
+                CreateMultipleRazorCodeActionProvider(),
+                CreateRazorCodeActionProvider()],
+            csharpCodeActionProviders: [
+                CreateCSharpCodeActionProvider(),
+                CreateCSharpCodeActionProvider()],
+            clientConnection: TestClientConnection.Instance);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockMultipleRazorCodeActionProvider(),
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Equal(7, commandOrCodeActionContainer.Length);
+    }
 
-            // Assert
-            Assert.Equal(2, commandOrCodeActionContainer.Count());
-        }
+    [Fact]
+    public async Task Handle_MultipleProviders()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-        [Fact]
-        public async Task Handle_MultipleCodeActionProvidersWithMultipleCodeActions()
+        var codeActionEndpoint = CreateEndpoint(
+            documentMappingService: CreateDocumentMappingService(s_defaultRange),
+            razorCodeActionProviders: [
+                CreateRazorCodeActionProvider(),
+                CreateRazorCodeActionProvider(),
+                CreateRazorCodeActionProvider()],
+            csharpCodeActionProviders: [
+                CreateCSharpCodeActionProvider(),
+                CreateCSharpCodeActionProvider()],
+            clientConnection: TestClientConnection.Instance);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var documentMappingService = CreateDocumentMappingService();
-            var languageServer = CreateLanguageServer();
-            var codeActionEndpoint = new CodeActionEndpoint(
-                documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockMultipleRazorCodeActionProvider(),
-                    new MockMultipleRazorCodeActionProvider(),
-                    new MockRazorCodeActionProvider(),
-                },
-                new CSharpCodeActionProvider[] {
-                    new MockCSharpCodeActionProvider(),
-                    new MockCSharpCodeActionProvider()
-                },
-                documentContextFactory,
-                languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Assert
-            Assert.Equal(7, commandOrCodeActionContainer.Count());
-        }
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Equal(5, commandOrCodeActionContainer.Length);
+    }
 
-        [Fact]
-        public async Task Handle_MultipleProviders()
+    [Fact]
+    public async Task Handle_OneNullReturningProvider()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+        var codeActionEndpoint = CreateEndpoint(razorCodeActionProviders: [CreateEmptyRazorCodeActionProvider()]);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var documentMappingService = CreateDocumentMappingService();
-            var languageServer = CreateLanguageServer();
-            var codeActionEndpoint = new CodeActionEndpoint(
-                documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider(),
-                    new MockRazorCodeActionProvider(),
-                    new MockRazorCodeActionProvider(),
-                },
-                new CSharpCodeActionProvider[] {
-                    new MockCSharpCodeActionProvider(),
-                    new MockCSharpCodeActionProvider()
-                },
-                documentContextFactory,
-                languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Assert
-            Assert.Equal(5, commandOrCodeActionContainer.Count());
-        }
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Empty(commandOrCodeActionContainer);
+    }
 
-        [Fact]
-        public async Task Handle_OneNullReturningProvider()
+    [Fact]
+    public async Task Handle_MultipleMixedProvider()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var codeActionEndpoint = CreateEndpoint(
+            documentMappingService: CreateDocumentMappingService(s_defaultRange),
+            razorCodeActionProviders: [
+                CreateRazorCodeActionProvider(),
+                CreateEmptyRazorCodeActionProvider(),
+                CreateRazorCodeActionProvider(),
+                CreateEmptyRazorCodeActionProvider()],
+            csharpCodeActionProviders: [
+                CreateCSharpCodeActionProvider(),
+                CreateCSharpCodeActionProvider()],
+            clientConnection: TestClientConnection.Instance);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockNullRazorCodeActionProvider()
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
 
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
 
-            // Assert
-            Assert.Null(commandOrCodeActionContainer);
-        }
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Equal(4, commandOrCodeActionContainer.Length);
+    }
 
-        [Fact]
-        public async Task Handle_MultipleMixedProvider()
+    [Fact]
+    public async Task Handle_MultipleMixedProvider_SupportsCodeActionResolveTrue()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var codeActionEndpoint = CreateEndpoint(
+            razorCodeActionProviders: [
+                CreateRazorCodeActionProvider(),
+                CreateRazorCommandProvider(),
+                CreateEmptyRazorCodeActionProvider()],
+            supportsCodeActionResolve: true);
+
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var documentMappingService = CreateDocumentMappingService();
-            var languageServer = CreateLanguageServer();
-            var codeActionEndpoint = new CodeActionEndpoint(
-                documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider(),
-                    new MockNullRazorCodeActionProvider(),
-                    new MockRazorCodeActionProvider(),
-                    new MockNullRazorCodeActionProvider(),
-                },
-                new CSharpCodeActionProvider[] {
-                    new MockCSharpCodeActionProvider(),
-                    new MockCSharpCodeActionProvider()
-                },
-                documentContextFactory,
-                languageServer,
-                _languageServerFeatureOptions)
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
+
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Collection(commandOrCodeActionContainer,
+            c =>
             {
-                _supportsCodeActionResolve = false
-            };
-
-            var request = new CodeActionParamsBridge()
+                Assert.True(c.TryGetSecond(out var codeAction));
+                Assert.True(codeAction is VSInternalCodeAction);
+            },
+            c =>
             {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+                Assert.True(c.TryGetSecond(out var codeAction));
+                Assert.True(codeAction is VSInternalCodeAction);
+            });
+    }
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+    [Fact]
+    public async Task Handle_MixedProvider_SupportsCodeActionResolveTrue_UsesGroups()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            // Assert
-            Assert.Equal(4, commandOrCodeActionContainer.Count());
-        }
+        var codeActionEndpoint = CreateEndpoint(
+            documentMappingService: CreateDocumentMappingService(s_defaultRange),
+            razorCodeActionProviders: [CreateRazorCodeActionProvider()],
+            csharpCodeActionProviders: [CreateCSharpCodeActionProvider()],
+            clientConnection: TestClientConnection.Instance,
+            supportsCodeActionResolve: true);
 
-        [Fact]
-        public async Task Handle_MultipleMixedProvider_SupportsCodeActionResolveTrue()
+        var request = new VSCodeActionParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider(),
-                    new MockRazorCommandProvider(),
-                    new MockNullRazorCodeActionProvider()
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
+
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Collection(commandOrCodeActionContainer,
+            c =>
             {
-                _supportsCodeActionResolve = true
-            };
-
-            var request = new CodeActionParamsBridge()
+                Assert.True(c.TryGetSecond(out var codeAction));
+                Assert.True(codeAction is VSInternalCodeAction);
+                Assert.Equal("A-Razor", ((VSInternalCodeAction)codeAction).Group);
+            },
+            c =>
             {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
+                Assert.True(c.TryGetSecond(out var codeAction));
+                Assert.True(codeAction is VSInternalCodeAction);
+                Assert.Equal("B-Delegated", ((VSInternalCodeAction)codeAction).Group);
+            });
+    }
 
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
+    [Fact]
+    public async Task Handle_MultipleMixedProvider_SupportsCodeActionResolveFalse()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            // Assert
-            Assert.Collection(commandOrCodeActionContainer,
-                c =>
+        var codeActionEndpoint = CreateEndpoint(
+            razorCodeActionProviders: [
+                CreateRazorCodeActionProvider(),
+                CreateRazorCommandProvider(),
+                CreateEmptyRazorCodeActionProvider()]);
+
+        var request = new VSCodeActionParams()
+        {
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = LspFactory.CreateZeroWidthRange(0, 1),
+            Context = new VSInternalCodeActionContext()
+        };
+
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var commandOrCodeActionContainer = await codeActionEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.NotNull(commandOrCodeActionContainer);
+        Assert.Collection(commandOrCodeActionContainer,
+            c =>
+            {
+                Assert.True(c.TryGetFirst(out var first));
+                var command = Assert.IsType<Command>(first);
+                Assert.NotNull(command.Arguments);
+                var codeActionParamsToken = (JsonObject)command.Arguments.First();
+                var codeActionParams = codeActionParamsToken.Deserialize<RazorCodeActionResolutionParams>();
+                Assert.NotNull(codeActionParams);
+                Assert.Equal(LanguageServerConstants.CodeActions.EditBasedCodeActionCommand, codeActionParams.Action);
+            },
+            c => Assert.True(c.TryGetFirst(out _)));
+    }
+
+    [Fact]
+    public async Task GetCSharpCodeActionsFromLanguageServerAsync_InvalidRangeMapping()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var (endpoint, _) = CreateEndpointAndService(csharpCodeActionProviders: [CreateCSharpCodeActionProvider()]);
+
+        var initialRange = LspFactory.CreateZeroWidthRange(0, 1);
+        var request = new VSCodeActionParams()
+        {
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = initialRange,
+            Context = new VSInternalCodeActionContext()
+        };
+
+        // Act
+        var results = await endpoint.GetTestAccessor().GetCSharpCodeActionsAsync(documentContext.Snapshot, request, Guid.Empty, DisposalToken);
+
+        // Assert
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public async Task GetCSharpCodeActionsFromLanguageServerAsync_ReturnsCodeActions()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/Page.razor");
+        var codeDocument = CreateCodeDocument("@code {}");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+        var projectedRange = LspFactory.CreateZeroWidthRange(15, 2);
+
+        var (endpoint, _) = CreateEndpointAndService(
+            documentMappingService: CreateDocumentMappingService(projectedRange.ToLinePositionSpan()),
+            csharpCodeActionProviders: [CreateCSharpCodeActionProvider()],
+            clientConnection: TestClientConnection.Instance);
+
+        var initialRange = LspFactory.CreateZeroWidthRange(0, 1);
+        var request = new VSCodeActionParams()
+        {
+            TextDocument = new VSTextDocumentIdentifier { DocumentUri = new(documentPath) },
+            Range = initialRange,
+            Context = new VSInternalCodeActionContext()
+            {
+                SelectionRange = initialRange
+            }
+        };
+
+        // Act
+        var results = await endpoint.GetTestAccessor().GetCSharpCodeActionsAsync(documentContext.Snapshot, request, Guid.Empty, DisposalToken);
+
+        // Assert
+        var result = Assert.Single(results);
+        Assert.NotNull(result.Diagnostics);
+        var diagnostics = result.Diagnostics.ToArray();
+        Assert.Equal(2, diagnostics.Length);
+
+        // Diagnostic ranges contain the projected range for
+        // 1. Range
+        // 2. SelectionRange
+        //
+        // This helps verify that the CodeActionEndpoint is mapping the
+        // ranges correctly using the mapping service
+        Assert.Equal(projectedRange, diagnostics[0].Range);
+        Assert.Equal(projectedRange, diagnostics[1].Range);
+    }
+
+    private CodeActionEndpoint CreateEndpoint(
+        IDocumentMappingService? documentMappingService = null,
+        ImmutableArray<IRazorCodeActionProvider> razorCodeActionProviders = default,
+        ImmutableArray<ICSharpCodeActionProvider> csharpCodeActionProviders = default,
+        ImmutableArray<IHtmlCodeActionProvider> htmlCodeActionProviders = default,
+        IClientConnection? clientConnection = null,
+        LanguageServerFeatureOptions? languageServerFeatureOptions = null,
+        bool supportsCodeActionResolve = false)
+    {
+        var (endpoint, _) = CreateEndpointAndService(
+            documentMappingService,
+            razorCodeActionProviders,
+            csharpCodeActionProviders,
+            htmlCodeActionProviders,
+            clientConnection,
+            languageServerFeatureOptions,
+            supportsCodeActionResolve);
+
+        return endpoint;
+    }
+
+    private (CodeActionEndpoint, CodeActionsService) CreateEndpointAndService(
+        IDocumentMappingService? documentMappingService = null,
+        ImmutableArray<IRazorCodeActionProvider> razorCodeActionProviders = default,
+        ImmutableArray<ICSharpCodeActionProvider> csharpCodeActionProviders = default,
+        ImmutableArray<IHtmlCodeActionProvider> htmlCodeActionProviders = default,
+        IClientConnection? clientConnection = null,
+        LanguageServerFeatureOptions? languageServerFeatureOptions = null,
+        bool supportsCodeActionResolve = false)
+    {
+        var service = new CodeActionsService(
+            documentMappingService ?? CreateDocumentMappingService(),
+            razorCodeActionProviders.NullToEmpty(),
+            csharpCodeActionProviders.NullToEmpty(),
+            htmlCodeActionProviders.NullToEmpty(),
+            languageServerFeatureOptions ?? StrictMock.Of<LanguageServerFeatureOptions>(x => x.SupportsFileManipulation == true));
+
+        var delegatedCodeActionService = new DelegatedCodeActionsProvider(
+            clientConnection ?? StrictMock.Of<IClientConnection>(),
+            NoOpTelemetryReporter.Instance,
+            LoggerFactory);
+
+        var endpoint = new CodeActionEndpoint(service, delegatedCodeActionService, NoOpTelemetryReporter.Instance);
+        endpoint.GetTestAccessor().SetSupportsCodeActionResolve(supportsCodeActionResolve);
+
+        return (endpoint, service);
+    }
+
+    private static IDocumentMappingService CreateDocumentMappingService(LinePositionSpan? projectedRange = null)
+    {
+        var mock = new StrictMock<IDocumentMappingService>();
+
+        // If a range was provided, use that and return true; otherwise, return false.
+        var (outRange, result) = projectedRange is LinePositionSpan
+            ? (projectedRange.GetValueOrDefault(), true)
+            : (It.Ref<LinePositionSpan>.IsAny, false);
+
+        mock.Setup(x => x.TryMapToCSharpDocumentRange(It.IsAny<RazorCSharpDocument>(), It.IsAny<LinePositionSpan>(), out outRange))
+            .Returns(result);
+
+        return mock.Object;
+    }
+
+    private static RazorCodeDocument CreateCodeDocument(string text)
+    {
+        var sourceDocument = TestRazorSourceDocument.Create(text);
+        var projectEngine = RazorProjectEngine.Create(builder => { });
+
+        return projectEngine.Process(sourceDocument, RazorFileKind.Legacy, importSources: [], tagHelpers: []);
+    }
+
+    private static IRazorCodeActionProvider CreateEmptyRazorCodeActionProvider()
+        => CreateRazorCodeActionProvider([]);
+
+    private static IRazorCodeActionProvider CreateRazorCodeActionProvider()
+        => CreateRazorCodeActionProvider(new RazorVSInternalCodeAction());
+
+    private static IRazorCodeActionProvider CreateMultipleRazorCodeActionProvider()
+        => CreateRazorCodeActionProvider(
+            new RazorVSInternalCodeAction(),
+            new RazorVSInternalCodeAction());
+
+    private static IRazorCodeActionProvider CreateRazorCommandProvider()
+        => CreateRazorCodeActionProvider(
+            new RazorVSInternalCodeAction()
+            {
+                Title = "SomeTitle",
+                Data = JsonSerializer.SerializeToElement(new AddUsingsCodeActionParams()
                 {
-                    Assert.True(c.TryGetSecond(out var codeAction));
-                    Assert.True(codeAction is VSInternalCodeAction);
-                },
-                c =>
+                    Namespace = "Test",
+                })
+            });
+
+    private static IRazorCodeActionProvider CreateRazorCodeActionProvider(params ImmutableArray<RazorVSInternalCodeAction> codeActions)
+    {
+        var mock = new StrictMock<IRazorCodeActionProvider>();
+
+        mock.Setup(x => x.ProvideAsync(It.IsAny<RazorCodeActionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => codeActions);
+
+        return mock.Object;
+    }
+
+    private static ICSharpCodeActionProvider CreateCSharpCodeActionProvider()
+        => CreateCSharpCodeActionProvider([new RazorVSInternalCodeAction()]);
+
+    private static ICSharpCodeActionProvider CreateCSharpCodeActionProvider(params ImmutableArray<RazorVSInternalCodeAction> codeActions)
+    {
+        var mock = new StrictMock<ICSharpCodeActionProvider>();
+
+        mock.Setup(x => x.ProvideAsync(It.IsAny<RazorCodeActionContext>(), It.IsAny<ImmutableArray<RazorVSInternalCodeAction>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => codeActions);
+
+        return mock.Object;
+    }
+
+    private sealed class TestClientConnection : IClientConnection
+    {
+        public static readonly IClientConnection Instance = new TestClientConnection();
+
+        private static readonly string[] s_customTags = ["AddNew"];
+
+        private TestClientConnection()
+        {
+        }
+
+        public Task SendNotificationAsync<TParams>(string method, TParams @params, CancellationToken cancellationToken)
+        {
+            Assert.Equal(CustomMessageNames.RazorProvideCodeActionsEndpoint, method);
+
+            return Task.CompletedTask;
+        }
+
+        public Task SendNotificationAsync(string method, CancellationToken cancellationToken)
+            => throw new NotImplementedException();
+
+        public Task<TResponse> SendRequestAsync<TParams, TResponse>(string method, TParams @params, CancellationToken cancellationToken)
+        {
+            Assert.Equal(CustomMessageNames.RazorProvideCodeActionsEndpoint, method);
+
+            Assert.NotNull(@params);
+            var delegatedCodeActionParams = Assert.IsType<DelegatedCodeActionParams>(@params);
+
+            Assert.NotNull(delegatedCodeActionParams.CodeActionParams);
+            Assert.NotNull(delegatedCodeActionParams.CodeActionParams.Context);
+
+            var diagnostics = new List<Diagnostic>
+            {
+                new()
                 {
-                    Assert.True(c.TryGetSecond(out var codeAction));
-                    Assert.True(codeAction is VSInternalCodeAction);
+                    Range = delegatedCodeActionParams.CodeActionParams.Range,
+                    Message = "Range"
+                }
+            };
+
+            if (delegatedCodeActionParams.CodeActionParams.Context.SelectionRange is { } selectionRange)
+            {
+                diagnostics.Add(new()
+                {
+                    Range = selectionRange,
+                    Message = "Selection Range"
                 });
-        }
-
-        [Fact]
-        public async Task Handle_MultipleMixedProvider_SupportsCodeActionResolveFalse()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider(),
-                    new MockRazorCommandProvider(),
-                    new MockNullRazorCodeActionProvider()
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = new Range { Start = new Position(0, 1), End = new Position(0, 1) },
-                Context = new VSInternalCodeActionContext()
-            };
-
-            // Act
-            var commandOrCodeActionContainer = await codeActionEndpoint.Handle(request, default);
-
-            // Assert
-            Assert.Collection(commandOrCodeActionContainer,
-                c =>
-                {
-                    Assert.True(c.TryGetFirst(out var command1));
-                    var command = Assert.IsType<Command>(command1);
-                    var codeActionParamsToken = (JToken)command.Arguments.First();
-                    var codeActionParams = codeActionParamsToken.ToObject<RazorCodeActionResolutionParams>();
-                    Assert.Equal(LanguageServerConstants.CodeActions.EditBasedCodeActionCommand, codeActionParams.Action);
-                },
-                c => Assert.True(c.TryGetFirst(out var _)));
-        }
-
-        [Fact]
-        public async Task GenerateRazorCodeActionContextAsync_WithSelectionRange()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider()
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-
-            var initialRange = new Range { Start = new Position(0, 1), End = new Position(0, 1) };
-            var selectionRange = new Range { Start = new Position(0, 5), End = new Position(0, 5) };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = initialRange,
-                Context = new VSInternalCodeActionContext()
-                {
-                    SelectionRange = selectionRange,
-                }
-            };
-
-            // Act
-            var razorCodeActionContext = await codeActionEndpoint.GenerateRazorCodeActionContextAsync(request, default);
-
-            // Assert
-            Assert.NotNull(razorCodeActionContext);
-            Assert.Equal(selectionRange, razorCodeActionContext.Request.Range);
-        }
-
-        [Fact]
-        public async Task GenerateRazorCodeActionContextAsync_WithoutSelectionRange()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                _documentMappingService,
-                new RazorCodeActionProvider[] {
-                    new MockRazorCodeActionProvider()
-                },
-                Array.Empty<CSharpCodeActionProvider>(),
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-
-            var initialRange = new Range { Start = new Position(0, 1), End = new Position(0, 1) };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = initialRange,
-                Context = new VSInternalCodeActionContext()
-                {
-                    SelectionRange = null
-                }
-            };
-
-            // Act
-            var razorCodeActionContext = await codeActionEndpoint.GenerateRazorCodeActionContextAsync(request, default);
-
-            // Assert
-            Assert.NotNull(razorCodeActionContext);
-            Assert.Equal(initialRange, razorCodeActionContext.Request.Range);
-        }
-
-        [Fact]
-        public async Task GetCSharpCodeActionsFromLanguageServerAsync_InvalidRangeMapping()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            Range projectedRange = null;
-            var documentMappingService = Mock.Of<DefaultRazorDocumentMappingService>(
-                d => d.TryMapToProjectedDocumentRange(It.IsAny<RazorCodeDocument>(), It.IsAny<Range>(), out projectedRange) == false
-            , MockBehavior.Strict);
-            var codeActionEndpoint = new CodeActionEndpoint(
-                documentMappingService,
-                Array.Empty<RazorCodeActionProvider>(),
-                new CSharpCodeActionProvider[] {
-                    new MockCSharpCodeActionProvider()
-                },
-                documentContextFactory,
-                _languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-
-            var initialRange = new Range { Start = new Position(0, 1), End = new Position(0, 1) };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = initialRange,
-                Context = new VSInternalCodeActionContext()
-            };
-
-            var context = await codeActionEndpoint.GenerateRazorCodeActionContextAsync(request, default);
-
-            // Act
-            var results = await codeActionEndpoint.GetCSharpCodeActionsFromLanguageServerAsync(context, default);
-
-            // Assert
-            Assert.Empty(results);
-            Assert.Equal(initialRange, context.Request.Range);
-        }
-
-        [Fact]
-        public async Task GetCSharpCodeActionsFromLanguageServerAsync_ReturnsCodeActions()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/Page.razor");
-            var codeDocument = CreateCodeDocument("@code {}");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-            var projectedRange = new Range { Start = new Position(15, 2), End = new Position(15, 2) };
-            var documentMappingService = CreateDocumentMappingService(projectedRange);
-            var languageServer = CreateLanguageServer();
-            var codeActionEndpoint = new CodeActionEndpoint(
-                documentMappingService,
-                Array.Empty<RazorCodeActionProvider>(),
-                new CSharpCodeActionProvider[] {
-                    new MockCSharpCodeActionProvider()
-                },
-                documentContextFactory,
-                languageServer,
-                _languageServerFeatureOptions)
-            {
-                _supportsCodeActionResolve = false
-            };
-
-            var initialRange = new Range { Start = new Position(0, 1), End = new Position(0, 1) };
-            var request = new CodeActionParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = documentPath },
-                Range = initialRange,
-                Context = new VSInternalCodeActionContext()
-                {
-                    SelectionRange = initialRange
-                }
-            };
-
-            var context = await codeActionEndpoint.GenerateRazorCodeActionContextAsync(request, default);
-
-            // Act
-            var results = await codeActionEndpoint.GetCSharpCodeActionsFromLanguageServerAsync(context, default);
-
-            // Assert
-            Assert.Single(results);
-            var diagnostics = results.Single().Diagnostics.ToArray();
-            Assert.Equal(2, diagnostics.Length);
-
-            // Diagnostic ranges contain the projected range for
-            // 1. Range
-            // 2. SelectionRange
-            //
-            // This helps verify that the CodeActionEndpoint is mapping the
-            // ranges correctly using the mapping service
-            Assert.Equal(projectedRange, diagnostics[0].Range);
-            Assert.Equal(projectedRange, diagnostics[1].Range);
-        }
-
-        private static DefaultRazorDocumentMappingService CreateDocumentMappingService(Range projectedRange = null)
-        {
-            projectedRange ??= new Range { Start = new Position(5, 2), End = new Position(5, 2) };
-            var documentMappingService = Mock.Of<DefaultRazorDocumentMappingService>(
-                d => d.TryMapToProjectedDocumentRange(It.IsAny<RazorCodeDocument>(), It.IsAny<Range>(), out projectedRange) == true
-            , MockBehavior.Strict);
-            return documentMappingService;
-        }
-
-        private static ClientNotifierServiceBase CreateLanguageServer()
-        {
-            return new TestLanguageServer();
-        }
-
-        private static RazorCodeDocument CreateCodeDocument(string text)
-        {
-            var codeDocument = TestRazorCodeDocument.CreateEmpty();
-            var sourceDocument = TestRazorSourceDocument.Create(text);
-            var syntaxTree = RazorSyntaxTree.Parse(sourceDocument);
-            codeDocument.SetSyntaxTree(syntaxTree);
-            return codeDocument;
-        }
-
-        private class MockRazorCodeActionProvider : RazorCodeActionProvider
-        {
-            public override Task<IReadOnlyList<RazorVSInternalCodeAction>> ProvideAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-            {
-                return Task.FromResult(new List<RazorVSInternalCodeAction>() { new RazorVSInternalCodeAction() } as IReadOnlyList<RazorVSInternalCodeAction>);
-            }
-        }
-
-        private class MockMultipleRazorCodeActionProvider : RazorCodeActionProvider
-        {
-            public override Task<IReadOnlyList<RazorVSInternalCodeAction>> ProvideAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-            {
-                return Task.FromResult(new List<RazorVSInternalCodeAction>()
-                {
-                    new RazorVSInternalCodeAction(),
-                    new RazorVSInternalCodeAction()
-                } as IReadOnlyList<RazorVSInternalCodeAction>);
-            }
-        }
-
-        private class MockCSharpCodeActionProvider : CSharpCodeActionProvider
-        {
-            public override Task<IReadOnlyList<RazorVSInternalCodeAction>> ProvideAsync(RazorCodeActionContext context, IEnumerable<RazorVSInternalCodeAction> codeActions, CancellationToken cancellationToken)
-            {
-                return Task.FromResult(new List<RazorVSInternalCodeAction>()
-                {
-                    new RazorVSInternalCodeAction()
-                } as IReadOnlyList<RazorVSInternalCodeAction>);
-            }
-        }
-
-        private class MockRazorCommandProvider : RazorCodeActionProvider
-        {
-            public override Task<IReadOnlyList<RazorVSInternalCodeAction>> ProvideAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-            {
-                // O# Code Actions don't have `Data`, but `Commands` do
-                return Task.FromResult(new List<RazorVSInternalCodeAction>() {
-                    new RazorVSInternalCodeAction() {
-                        Title = "SomeTitle",
-                        Data = JToken.FromObject(new AddUsingsCodeActionParams())
-                    }
-                } as IReadOnlyList<RazorVSInternalCodeAction>);
-            }
-        }
-
-        private class MockNullRazorCodeActionProvider : RazorCodeActionProvider
-        {
-            public override Task<IReadOnlyList<RazorVSInternalCodeAction>> ProvideAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-            {
-                return Task.FromResult<IReadOnlyList<RazorVSInternalCodeAction>>(null);
-            }
-        }
-
-        private class TestLanguageServer : ClientNotifierServiceBase
-        {
-            public override OmniSharp.Extensions.LanguageServer.Protocol.Models.InitializeParams ClientSettings => throw new NotImplementedException();
-
-            public override Task OnStarted(OmniSharp.Extensions.LanguageServer.Protocol.Server.ILanguageServer server, CancellationToken cancellationToken) => Task.CompletedTask;
-
-            public override Task<IResponseRouterReturns> SendRequestAsync(string method)
-            {
-                if (method != RazorLanguageServerCustomMessageTargets.RazorProvideCodeActionsEndpoint)
-                {
-                    throw new InvalidOperationException($"Unexpected method {method}");
-                }
-
-                return Task.FromResult<IResponseRouterReturns>(new TestResponseRouterReturns(null));
             }
 
-            public override Task<IResponseRouterReturns> SendRequestAsync<T>(string method, T @params)
+            // Create a code action specifically with diagnostics that
+            // contain the contextual information for it's creation. This is
+            // a hacky way to verify that data transmitted to the language server
+            // is correct rather than providing specific test hooks in the CodeActionEndpoint
+            var result = new[]
             {
-                if (method != RazorLanguageServerCustomMessageTargets.RazorProvideCodeActionsEndpoint)
+                new RazorVSInternalCodeAction()
                 {
-                    throw new InvalidOperationException($"Unexpected method {method}");
+                    Data = JsonSerializer.SerializeToElement(new { CustomTags = s_customTags }),
+                    Diagnostics = [.. diagnostics]
                 }
+            };
 
-                if (@params is not CodeActionParams codeActionParams || codeActionParams.Context is not VSInternalCodeActionContext codeActionContext)
-                {
-                    throw new InvalidOperationException(@params.GetType().FullName);
-                }
-
-                // Create a code action specifically with diagnostics that
-                // contain the contextual information for it's creation. This is
-                // a hacky way to verify that data transmitted to the language server
-                // is correct rather than providing specific test hooks in the CodeActionEndpoint
-                var result = new[]
-                {
-                    new RazorVSInternalCodeAction()
-                    {
-                        Data = JToken.FromObject(new { CustomTags = new object[] { "CodeActionName" } }),
-                        Diagnostics = new[]
-                        {
-                            new Diagnostic()
-                            {
-                                Range = codeActionParams.Range,
-                                Message = "Range"
-                            },
-                            new Diagnostic()
-                            {
-                                Range = codeActionContext.SelectionRange,
-                                Message = "Selection Range"
-                            }
-                        }
-                    }
-                };
-
-                return Task.FromResult<IResponseRouterReturns>(new TestResponseRouterReturns(result));
-            }
-
-            private class TestResponseRouterReturns : IResponseRouterReturns
-            {
-                private readonly object _result;
-
-                public TestResponseRouterReturns(object result)
-                {
-                    _result = result;
-                }
-
-                public Task<Response> Returning<Response>(CancellationToken cancellationToken)
-                {
-                    return Task.FromResult((Response)_result);
-                }
-
-                public Task ReturningVoid(CancellationToken cancellationToken)
-                {
-                    return Task.CompletedTask;
-                }
-            }
+            return Task.FromResult((TResponse)(object)result);
         }
     }
 }

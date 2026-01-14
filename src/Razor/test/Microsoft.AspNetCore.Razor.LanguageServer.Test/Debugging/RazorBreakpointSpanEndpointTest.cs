@@ -1,210 +1,252 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common.Extensions;
-using Microsoft.AspNetCore.Razor.LanguageServer.Debugging;
-using Microsoft.AspNetCore.Razor.LanguageServer.Protocol;
-using Microsoft.AspNetCore.Razor.LanguageServer.Test.Common;
-using Microsoft.AspNetCore.Razor.Test.Common;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
+using Microsoft.AspNetCore.Razor.Test.Common.LanguageServer;
+using Microsoft.CodeAnalysis.Razor.DocumentMapping;
+using Microsoft.CodeAnalysis.Razor.Protocol.Debugging;
 using Xunit;
-using Range = Microsoft.VisualStudio.LanguageServer.Protocol.Range;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.Test.Debugging
+namespace Microsoft.AspNetCore.Razor.LanguageServer.Debugging;
+
+public class RazorBreakpointSpanEndpointTest : LanguageServerTestBase
 {
-    public class RazorBreakpointSpanEndpointTest : LanguageServerTestBase
+    private readonly IDocumentMappingService _mappingService;
+
+    public RazorBreakpointSpanEndpointTest(ITestOutputHelper testOutput)
+        : base(testOutput)
     {
-        public RazorBreakpointSpanEndpointTest()
-        {
-            MappingService = new DefaultRazorDocumentMappingService(TestLanguageServerFeatureOptions.Instance, new TestDocumentContextFactory(), LoggerFactory);
-        }
+        _mappingService = new LspDocumentMappingService(
+            FilePathService,
+            new TestDocumentContextFactory(),
+            LoggerFactory);
+    }
 
-        private RazorDocumentMappingService MappingService { get; }
-
-        [Fact]
-        public void GetMappingBehavior_CSHTML()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var documentContext = TestDocumentContext.Create(documentPath);
-
-            // Act
-            var result = RazorBreakpointSpanEndpoint.GetMappingBehavior(documentContext);
-
-            // Assert
-            Assert.Equal(MappingBehavior.Inclusive, result);
-        }
-
-        [Fact]
-        public void GetMappingBehavior_Razor()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.razor");
-            var documentContext = TestDocumentContext.Create(documentPath);
-
-            // Act
-            var result = RazorBreakpointSpanEndpoint.GetMappingBehavior(documentContext);
-
-            // Assert
-            Assert.Equal(MappingBehavior.Strict, result);
-        }
-
-        [Fact]
-        public async Task Handle_UnsupportedDocument_ReturnsNull()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
-<p>@DateTime.Now</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
-
-            var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorBreakpointSpanParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0)
-            };
-            codeDocument.SetUnsupported();
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        [Fact]
-        public async Task Handle_StartsInHtml_BreakpointMoved()
-        {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+    [Fact]
+    public async Task Handle_StartsInHtml_BreakpointMoved()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p>@{var abc = 123;}</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorBreakpointSpanParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0)
-            };
-            var expectedRange = new Range { Start = new Position(1, 5), End = new Position(1, 19) };
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Equal(expectedRange, response!.Range);
-        }
-
-        [Fact]
-        public async Task Handle_StartsInHtml_InvalidBreakpointSpan_ReturnsNull()
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 1,
+        };
+        var expectedRange = LspFactory.CreateSingleLineRange(line: 1, character: 5, length: 14);
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            var codeDocument = CreateCodeDocument(@"
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Equal(expectedRange, response!.Range);
+    }
+
+    [Fact]
+    public async Task Handle_ImplicitExpression_StartsInHtml_BreakpointMoved()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
+<p>@currentCount</p>");
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
+        {
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 1,
+        };
+        var expectedRange = LspFactory.CreateSingleLineRange(line: 1, character: 4, length: 12);
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Equal(expectedRange, response!.Range);
+    }
+
+    [Fact]
+    public async Task Handle_StartsInHtml_BreakpointMoved_Razor()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.razor");
+        var codeDocument = CreateCodeDocument(@"
+<p>@{var abc = 123;}</p>", RazorFileKind.Component);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
+        {
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 1,
+        };
+        var expectedRange = LspFactory.CreateSingleLineRange(line: 1, character: 5, length: 14);
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Equal(expectedRange, response!.Range);
+    }
+
+    [Fact]
+    public async Task Handle_ImplicitExpression_StartsInHtml_BreakpointMoved_Razor()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.razor");
+        var codeDocument = CreateCodeDocument(@"
+<p>@currentCount</p>", RazorFileKind.Component);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
+
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
+        {
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 1,
+        };
+        var expectedRange = LspFactory.CreateSingleLineRange(line: 1, character: 4, length: 12);
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Equal(expectedRange, response!.Range);
+    }
+
+    [Fact]
+    public async Task Handle_StartsInHtml_InvalidBreakpointSpan_ReturnsNull()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+
+        var codeDocument = CreateCodeDocument(@"
 <p>@{var abc;}</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorBreakpointSpanParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0)
-            };
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        [Fact]
-        public async Task Handle_StartInHtml_NoCSharpOnLine_ReturnsNull()
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 1,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public async Task Handle_StartInHtml_NoCSharpOnLine_ReturnsNull()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p></p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorBreakpointSpanParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0)
-            };
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        [Fact]
-        public async Task Handle_StartInHtml_NoActualCSharp_ReturnsNull()
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(
-                @"
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 0,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public async Task Handle_StartInHtml_NoActualCSharp_ReturnsNull()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(
+            @"
 <p>@{
     var abc = 123;
 }</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorBreakpointSpanParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(1, 0)
-            };
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        [Fact]
-        public async Task Handle_InvalidBreakpointSpan_ReturnsNull()
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
         {
-            // Arrange
-            var documentPath = new Uri("C:/path/to/document.cshtml");
-            var codeDocument = CreateCodeDocument(@"
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(1, 0),
+            HostDocumentSyncVersion = 0,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Null(response);
+    }
+
+    [Fact]
+    public async Task Handle_InvalidBreakpointSpan_ReturnsNull()
+    {
+        // Arrange
+        var documentPath = new Uri("C:/path/to/document.cshtml");
+        var codeDocument = CreateCodeDocument(@"
 <p>@{
 
     var abc = 123;
 }</p>");
-            var documentContextFactory = CreateDocumentContextFactory(documentPath, codeDocument);
+        var documentContext = CreateDocumentContext(documentPath, codeDocument);
 
-            var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(documentContextFactory, MappingService, LoggerFactory);
-            var request = new RazorBreakpointSpanParamsBridge()
-            {
-                Uri = documentPath,
-                Position = new Position(2, 0)
-            };
-
-            // Act
-            var response = await Task.Run(() => diagnosticsEndpoint.Handle(request, default));
-
-            // Assert
-            Assert.Null(response);
-        }
-
-        private static RazorCodeDocument CreateCodeDocument(string text)
+        var diagnosticsEndpoint = new RazorBreakpointSpanEndpoint(_mappingService, LoggerFactory);
+        var request = new RazorBreakpointSpanParams()
         {
-            var sourceDocument = TestRazorSourceDocument.Create(text);
-            var projectEngine = RazorProjectEngine.Create(builder => { });
-            var codeDocument = projectEngine.ProcessDesignTime(sourceDocument, FileKinds.Legacy, Array.Empty<RazorSourceDocument>(), Array.Empty<TagHelperDescriptor>());
-            return codeDocument;
-        }
+            Uri = documentPath,
+            Position = LspFactory.CreatePosition(2, 0),
+            HostDocumentSyncVersion = 0,
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
+
+        // Act
+        var response = await diagnosticsEndpoint.HandleRequestAsync(request, requestContext, DisposalToken);
+
+        // Assert
+        Assert.Null(response);
+    }
+
+    private static RazorCodeDocument CreateCodeDocument(string text, RazorFileKind? fileKind = null)
+    {
+        var sourceDocument = TestRazorSourceDocument.Create(text);
+        var projectEngine = RazorProjectEngine.Create(builder =>
+        {
+            builder.ConfigureParserOptions(builder =>
+            {
+                builder.UseRoslynTokenizer = true;
+            });
+        });
+
+        return projectEngine.Process(sourceDocument, fileKind ?? RazorFileKind.Legacy, importSources: default, tagHelpers: []);
     }
 }

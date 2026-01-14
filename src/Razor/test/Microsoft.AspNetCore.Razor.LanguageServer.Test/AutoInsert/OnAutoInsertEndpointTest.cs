@@ -1,281 +1,166 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using System.Threading;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.LanguageServer.AutoInsert;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common.Extensions;
-using Microsoft.AspNetCore.Razor.LanguageServer.EndpointContracts;
-using Microsoft.AspNetCore.Razor.LanguageServer.Test;
-using Microsoft.AspNetCore.Razor.Test.Common;
-using Microsoft.Extensions.Logging;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
-using Moq;
+using Microsoft.CodeAnalysis.Razor.AutoInsert;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.Formatting
+namespace Microsoft.AspNetCore.Razor.LanguageServer.AutoInsert;
+
+public partial class OnAutoInsertEndpointTest(ITestOutputHelper testOutput) : SingleServerDelegatingEndpointTestBase(testOutput)
 {
-    public class OnAutoInsertEndpointTest : LanguageServerTestBase
+    [Fact]
+    public async Task Handle_MultipleProviderUnmatchingTrigger_ReturnsNull()
     {
-        public OnAutoInsertEndpointTest()
+        // Arrange
+        var codeDocument = CreateCodeDocument();
+        var razorFilePath = "file://path/test.razor";
+        var uri = new Uri(razorFilePath);
+        await using var languageServer = await CreateLanguageServerAsync(codeDocument, razorFilePath);
+        var documentContext = CreateDocumentContext(uri, codeDocument);
+        var optionsMonitor = GetOptionsMonitor();
+        var insertProvider1 = new TestOnAutoInsertProvider(">", canResolve: true);
+        var insertProvider2 = new TestOnAutoInsertProvider("<", canResolve: true);
+        var autoInsertService = new AutoInsertService([insertProvider1, insertProvider2]);
+        var endpoint = new OnAutoInsertEndpoint(
+            DocumentMappingService,
+            languageServer,
+            autoInsertService,
+            optionsMonitor,
+            null!,
+            LoggerFactory);
+        var @params = new VSInternalDocumentOnAutoInsertParams()
         {
-            EmptyDocumentContextFactory = Mock.Of<DocumentContextFactory>(r => r.TryCreateAsync(It.IsAny<Uri>(), It.IsAny<CancellationToken>()) == Task.FromResult<DocumentContext?>(null), MockBehavior.Strict);
-        }
+            TextDocument = new TextDocumentIdentifier { DocumentUri = new(uri), },
+            Position = LspFactory.DefaultPosition,
+            Character = "!",
+            Options = new FormattingOptions
+            {
+                TabSize = 4,
+                InsertSpaces = true
+            },
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-        private DocumentContextFactory EmptyDocumentContextFactory { get; }
+        // Act
+        var result = await endpoint.HandleRequestAsync(@params, requestContext, DisposalToken);
 
-        [Fact]
-        public async Task Handle_SingleProvider_InvokesProvider()
+        // Assert
+        Assert.Null(result);
+        Assert.False(insertProvider1.Called);
+        Assert.False(insertProvider2.Called);
+        Assert.Equal(0, languageServer.RequestCount);
+    }
+
+    [Fact]
+    public async Task Handle_DocumentNotFound_ReturnsNull()
+    {
+        // Arrange
+        var codeDocument = CreateCodeDocument();
+        var razorFilePath = "file://path/test.razor";
+        await using var languageServer = await CreateLanguageServerAsync(codeDocument, razorFilePath);
+
+        var optionsMonitor = GetOptionsMonitor();
+        var insertProvider = new TestOnAutoInsertProvider(">", canResolve: true);
+        var endpoint = new OnAutoInsertEndpoint(
+            DocumentMappingService,
+            languageServer,
+            new AutoInsertService([insertProvider]),
+            optionsMonitor,
+            null!,
+            LoggerFactory);
+        var uri = new Uri("file://path/test.razor");
+        var @params = new VSInternalDocumentOnAutoInsertParams()
         {
-            // Arrange
-            var codeDocument = CreateCodeDocument();
-            var uri = new Uri("file://path/test.razor");
-            var documentContextFactory = CreateDocumentContextFactory(uri, codeDocument);
-            var insertProvider = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory);
-            var endpoint = new OnAutoInsertEndpoint(documentContextFactory, new[] { insertProvider }, TestAdhocWorkspaceFactory.Instance);
-            var @params = new OnAutoInsertParamsBridge()
+            TextDocument = new TextDocumentIdentifier { DocumentUri = new(uri), },
+            Position = LspFactory.DefaultPosition,
+            Character = ">",
+            Options = new FormattingOptions
             {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = ">",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
+                TabSize = 4,
+                InsertSpaces = true
+            },
+        };
+        var requestContext = CreateRazorRequestContext(documentContext: null);
 
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
+        // Act
+        var result = await endpoint.HandleRequestAsync(@params, requestContext, DisposalToken);
 
-            // Assert
-            Assert.NotNull(result);
-            Assert.True(insertProvider.Called);
-        }
+        // Assert
+        Assert.Null(result);
+        Assert.False(insertProvider.Called);
+        Assert.Equal(0, languageServer.RequestCount);
+    }
 
-        [Fact]
-        public async Task Handle_MultipleProviderSameTrigger_UsesSuccessful()
+    [Fact]
+    public async Task Handle_OnTypeFormattingOff_CSharp_ReturnsNull()
+    {
+        // Arrange
+        var codeDocument = CreateCodeDocument();
+        var razorFilePath = "file://path/test.razor";
+        var uri = new Uri(razorFilePath);
+        await using var languageServer = await CreateLanguageServerAsync(codeDocument, razorFilePath);
+        var documentContext = CreateDocumentContext(uri, codeDocument);
+        var optionsMonitor = GetOptionsMonitor(formatOnType: false);
+        var insertProvider = new TestOnAutoInsertProvider(">", canResolve: false);
+        var endpoint = new OnAutoInsertEndpoint(
+            DocumentMappingService,
+            languageServer,
+            new AutoInsertService([insertProvider]),
+            optionsMonitor,
+            razorFormattingService: null!,
+            LoggerFactory);
+        var @params = new VSInternalDocumentOnAutoInsertParams()
         {
-            // Arrange
-            var codeDocument = CreateCodeDocument();
-            var uri = new Uri("file://path/test.razor");
-            var documentContextFactory = CreateDocumentContextFactory(uri, codeDocument);
-            var insertProvider1 = new TestOnAutoInsertProvider(">", canResolve: false, LoggerFactory)
+            TextDocument = new TextDocumentIdentifier { DocumentUri = new(uri), },
+            Position = LspFactory.CreatePosition(1, 3),
+            Character = "/",
+            Options = new FormattingOptions
             {
-                ResolvedTextEdit = new TextEdit()
-            };
-            var insertProvider2 = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory)
-            {
-                ResolvedTextEdit = new TextEdit()
-            };
-            var endpoint = new OnAutoInsertEndpoint(documentContextFactory, new[] { insertProvider1, insertProvider2 }, TestAdhocWorkspaceFactory.Instance);
-            var @params = new OnAutoInsertParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = ">",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
+                TabSize = 4,
+                InsertSpaces = true
+            },
+        };
+        var requestContext = CreateRazorRequestContext(documentContext);
 
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
+        // Act
+        var result = await endpoint.HandleRequestAsync(@params, requestContext, DisposalToken);
 
-            // Assert
-            Assert.NotNull(result);
-            Assert.True(insertProvider1.Called);
-            Assert.True(insertProvider2.Called);
-            Assert.Same(insertProvider2.ResolvedTextEdit, result?.TextEdit);
-        }
+        // Assert
+        Assert.Null(result);
+        Assert.Equal(0, languageServer.RequestCount);
+    }
 
-        [Fact]
-        public async Task Handle_MultipleProviderSameTrigger_UsesFirstSuccessful()
+    private class TestOnAutoInsertProvider(string triggerCharacter, bool canResolve) : IOnAutoInsertProvider
+    {
+        public bool Called { get; private set; }
+
+        public TextEdit? ResolvedTextEdit { get; set; }
+
+        public string TriggerCharacter { get; } = triggerCharacter;
+
+        public bool TryResolveInsertion(
+            Position position,
+            RazorCodeDocument codeDocument,
+            bool enableAutoClosingTags,
+            [NotNullWhen(true)] out VSInternalDocumentOnAutoInsertResponseItem? autoInsertEdit)
         {
-            // Arrange
-            var codeDocument = CreateCodeDocument();
-            var uri = new Uri("file://path/test.razor");
-            var documentContextFactory = CreateDocumentContextFactory(uri, codeDocument);
-            var insertProvider1 = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory)
-            {
-                ResolvedTextEdit = new TextEdit()
-            };
-            var insertProvider2 = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory)
-            {
-                ResolvedTextEdit = new TextEdit()
-            };
-            var endpoint = new OnAutoInsertEndpoint(documentContextFactory, new[] { insertProvider1, insertProvider2 }, TestAdhocWorkspaceFactory.Instance);
-            var @params = new OnAutoInsertParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = ">",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
+            Called = true;
+            autoInsertEdit = canResolve ? new() { TextEdit = ResolvedTextEdit!, TextEditFormat = InsertTextFormat.Plaintext } : null;
 
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
-
-            // Assert
-            Assert.NotNull(result);
-            Assert.True(insertProvider1.Called);
-            Assert.False(insertProvider2.Called);
-            Assert.Same(insertProvider1.ResolvedTextEdit, result?.TextEdit);
+            return canResolve;
         }
+    }
 
-        [Fact]
-        public async Task Handle_MultipleProviderUnmatchingTrigger_ReturnsNull()
-        {
-            // Arrange
-            var codeDocument = CreateCodeDocument();
-            var uri = new Uri("file://path/test.razor");
-            var documentContextFactory = CreateDocumentContextFactory(uri, codeDocument);
-            var insertProvider1 = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory);
-            var insertProvider2 = new TestOnAutoInsertProvider("<", canResolve: true, LoggerFactory);
-            var endpoint = new OnAutoInsertEndpoint(documentContextFactory, new[] { insertProvider1, insertProvider2 }, TestAdhocWorkspaceFactory.Instance);
-            var @params = new OnAutoInsertParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = "!",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
+    private static RazorCodeDocument CreateCodeDocument()
+    {
+        return CreateCodeDocument("""
 
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
-
-            // Assert
-            Assert.Null(result);
-            Assert.False(insertProvider1.Called);
-            Assert.False(insertProvider2.Called);
-        }
-
-        [Fact]
-        public async Task Handle_DocumentNotFound_ReturnsNull()
-        {
-            // Arrange
-            var insertProvider = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory);
-            var endpoint = new OnAutoInsertEndpoint(EmptyDocumentContextFactory, new[] { insertProvider }, TestAdhocWorkspaceFactory.Instance);
-            var uri = new Uri("file://path/test.razor");
-            var @params = new OnAutoInsertParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = ">",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
-
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
-
-            // Assert
-            Assert.Null(result);
-            Assert.False(insertProvider.Called);
-        }
-
-        [Fact]
-        public async Task Handle_UnsupportedCodeDocument_ReturnsNull()
-        {
-            // Arrange
-            var codeDocument = CreateCodeDocument();
-            codeDocument.SetUnsupported();
-            var uri = new Uri("file://path/test.razor");
-            var documentContextFactory = CreateDocumentContextFactory(uri, codeDocument);
-            var insertProvider = new TestOnAutoInsertProvider(">", canResolve: true, LoggerFactory);
-            var endpoint = new OnAutoInsertEndpoint(documentContextFactory, new[] { insertProvider }, TestAdhocWorkspaceFactory.Instance);
-            var @params = new OnAutoInsertParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = ">",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
-
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
-
-            // Assert
-            Assert.Null(result);
-            Assert.False(insertProvider.Called);
-        }
-
-        [Fact]
-        public async Task Handle_NoApplicableProvider_CallsProviderAndReturnsNull()
-        {
-            // Arrange
-            var codeDocument = CreateCodeDocument();
-            var uri = new Uri("file://path/test.razor");
-            var documentContextFactory = CreateDocumentContextFactory(uri, codeDocument);
-            var insertProvider = new TestOnAutoInsertProvider(">", canResolve: false, LoggerFactory);
-            var endpoint = new OnAutoInsertEndpoint(documentContextFactory, new[] { insertProvider }, TestAdhocWorkspaceFactory.Instance);
-            var @params = new OnAutoInsertParamsBridge()
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri, },
-                Character = ">",
-                Options = new FormattingOptions
-                {
-                    TabSize = 4,
-                    InsertSpaces = true
-                },
-            };
-
-            // Act
-            var result = await endpoint.Handle(@params, CancellationToken.None);
-
-            // Assert
-            Assert.Null(result);
-            Assert.True(insertProvider.Called);
-        }
-
-        private class TestOnAutoInsertProvider : RazorOnAutoInsertProvider
-        {
-            private readonly bool _canResolve;
-
-            public TestOnAutoInsertProvider(string triggerCharacter, bool canResolve, ILoggerFactory loggerFactory) : base(loggerFactory)
-            {
-                TriggerCharacter = triggerCharacter;
-                _canResolve = canResolve;
-            }
-
-            public bool Called { get; private set; }
-
-            public TextEdit? ResolvedTextEdit { get; set; }
-
-            public override string TriggerCharacter { get; }
-
-            // Disabling because [NotNullWhen] is available in two Assemblies and causes warnings
-#pragma warning disable CS8765 // Nullability of type of parameter doesn't match overridden member (possibly because of nullability attributes).
-            public override bool TryResolveInsertion(Position position, FormattingContext context, out TextEdit? edit, out InsertTextFormat format)
-#pragma warning restore CS8765 // Nullability of type of parameter doesn't match overridden member (possibly because of nullability attributes).
-            {
-                Called = true;
-                edit = ResolvedTextEdit!;
-                format = default;
-                return _canResolve;
-            }
-        }
-
-        private static RazorCodeDocument CreateCodeDocument()
-        {
-            var codeDocument = TestRazorCodeDocument.CreateEmpty();
-            var emptySourceDocument = RazorSourceDocument.Create(content: string.Empty, fileName: "testFile.razor");
-            var syntaxTree = RazorSyntaxTree.Parse(emptySourceDocument);
-            codeDocument.SetSyntaxTree(syntaxTree);
-            return codeDocument;
-        }
+            @{ }
+            """);
     }
 }

@@ -1,27 +1,11 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
+using System.Collections.Immutable;
 
-using System;
-using System.Collections.Generic;
+namespace Microsoft.CodeAnalysis.Razor.Tooltip;
 
-namespace Microsoft.CodeAnalysis.Razor.Tooltip
+internal sealed record AggregateBoundAttributeDescription(ImmutableArray<BoundAttributeDescriptionInfo> DescriptionInfos)
 {
-    internal class AggregateBoundAttributeDescription
-    {
-        public static readonly AggregateBoundAttributeDescription Default = new AggregateBoundAttributeDescription(Array.Empty<BoundAttributeDescriptionInfo>());
-
-        public AggregateBoundAttributeDescription(IReadOnlyList<BoundAttributeDescriptionInfo> descriptionInfos)
-        {
-            if (descriptionInfos is null)
-            {
-                throw new ArgumentNullException(nameof(descriptionInfos));
-            }
-
-            DescriptionInfos = descriptionInfos;
-        }
-
-        public IReadOnlyList<BoundAttributeDescriptionInfo> DescriptionInfos { get; }
-    }
+    public static readonly AggregateBoundAttributeDescription Empty = new(ImmutableArray<BoundAttributeDescriptionInfo>.Empty);
 }

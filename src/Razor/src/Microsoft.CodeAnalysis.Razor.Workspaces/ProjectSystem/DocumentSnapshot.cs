@@ -1,39 +1,80 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-#nullable disable
-
-using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
+using Microsoft.CodeAnalysis.Razor.ProjectSystem.Legacy;
+using Microsoft.CodeAnalysis.Razor.ProjectSystem.Sources;
 using Microsoft.CodeAnalysis.Text;
 
-namespace Microsoft.CodeAnalysis.Razor.ProjectSystem
+namespace Microsoft.CodeAnalysis.Razor.ProjectSystem;
+
+internal sealed class DocumentSnapshot : IDocumentSnapshot, ILegacyDocumentSnapshot
 {
-    internal abstract class DocumentSnapshot
+    private readonly GeneratedOutputSource _generatedOutputSource;
+
+    public ProjectSnapshot Project { get; }
+
+    private readonly DocumentState _state;
+
+    public DocumentSnapshot(ProjectSnapshot project, DocumentState state)
     {
-        public abstract string FileKind { get; }
-
-        public abstract string FilePath { get; }
-
-        public abstract string TargetPath { get; }
-
-        public abstract ProjectSnapshot Project { get; }
-
-        public abstract bool SupportsOutput { get; }
-
-        public abstract IReadOnlyList<DocumentSnapshot> GetImports();
-
-        public abstract Task<SourceText> GetTextAsync();
-
-        public abstract Task<VersionStamp> GetTextVersionAsync();
-
-        public abstract Task<RazorCodeDocument> GetGeneratedOutputAsync();
-
-        public abstract bool TryGetText(out SourceText result);
-
-        public abstract bool TryGetTextVersion(out VersionStamp result);
-
-        public abstract bool TryGetGeneratedOutput(out RazorCodeDocument result);
+        Project = project;
+        _state = state;
+        _generatedOutputSource = new(this);
     }
+
+    public HostDocument HostDocument => _state.HostDocument;
+
+    public DocumentKey Key => new(Project.Key, FilePath);
+    public RazorFileKind FileKind => _state.HostDocument.FileKind;
+    public string FilePath => _state.HostDocument.FilePath;
+    public string TargetPath => _state.HostDocument.TargetPath;
+    public int Version => _state.Version;
+
+    IProjectSnapshot IDocumentSnapshot.Project => Project;
+
+    public bool TryGetText([NotNullWhen(true)] out SourceText? result)
+        => _state.TryGetText(out result);
+
+    public ValueTask<SourceText> GetTextAsync(CancellationToken cancellationToken)
+        => _state.GetTextAsync(cancellationToken);
+
+    public bool TryGetTextVersion(out VersionStamp result)
+        => _state.TryGetTextVersion(out result);
+
+    public ValueTask<VersionStamp> GetTextVersionAsync(CancellationToken cancellationToken)
+        => _state.GetTextVersionAsync(cancellationToken);
+
+    public bool TryGetGeneratedOutput([NotNullWhen(true)] out RazorCodeDocument? result)
+        => _generatedOutputSource.TryGetValue(out result);
+
+    public ValueTask<RazorCodeDocument> GetGeneratedOutputAsync(CancellationToken cancellationToken)
+        => _generatedOutputSource.GetValueAsync(cancellationToken);
+
+    public IDocumentSnapshot WithText(SourceText text)
+    {
+        return new DocumentSnapshot(Project, _state.WithText(text, VersionStamp.Create()));
+    }
+
+    public ValueTask<SyntaxTree> GetCSharpSyntaxTreeAsync(CancellationToken cancellationToken)
+    {
+        return TryGetGeneratedOutput(out var codeDocument)
+            ? new(codeDocument.GetOrParseCSharpSyntaxTree(cancellationToken))
+            : new(GetCSharpSyntaxTreeCoreAsync(cancellationToken));
+
+        async Task<SyntaxTree> GetCSharpSyntaxTreeCoreAsync(CancellationToken cancellationToken)
+        {
+            var codeDocument = await GetGeneratedOutputAsync(cancellationToken).ConfigureAwait(false);
+            return codeDocument.GetOrParseCSharpSyntaxTree(cancellationToken);
+        }
+    }
+
+    #region ILegacyDocumentSnapshot support
+
+    RazorFileKind ILegacyDocumentSnapshot.FileKind => FileKind;
+
+    #endregion
 }

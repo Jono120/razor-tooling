@@ -1,325 +1,117 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.LanguageServer.CodeActions.Models;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common.Extensions;
 using Microsoft.AspNetCore.Razor.LanguageServer.EndpointContracts;
-using Microsoft.AspNetCore.Razor.LanguageServer.Extensions;
-using Microsoft.CodeAnalysis.ExternalAccess.Razor;
-using Microsoft.CodeAnalysis.Razor.Workspaces;
-using Microsoft.CodeAnalysis.Text;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
-using Newtonsoft.Json.Linq;
+using Microsoft.AspNetCore.Razor.LanguageServer.Hosting;
+using Microsoft.CodeAnalysis.Razor.CodeActions;
+using Microsoft.CodeAnalysis.Razor.CodeActions.Models;
+using Microsoft.CodeAnalysis.Razor.ProjectSystem;
+using Microsoft.CodeAnalysis.Razor.Protocol;
+using Microsoft.CodeAnalysis.Razor.Protocol.CodeActions;
+using Microsoft.CodeAnalysis.Razor.Telemetry;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.CodeActions
+namespace Microsoft.AspNetCore.Razor.LanguageServer.CodeActions;
+
+[RazorLanguageServerEndpoint(LspEndpointName)]
+internal sealed class CodeActionEndpoint(
+    ICodeActionsService codeActionsService,
+    IDelegatedCodeActionsProvider delegatedCodeActionProvider,
+    ITelemetryReporter telemetryReporter)
+    : IRazorRequestHandler<VSCodeActionParams, SumType<Command, CodeAction>[]?>, ICapabilitiesProvider
 {
-    internal class CodeActionEndpoint : IVSCodeActionEndpoint
+    private const string LspEndpointName = Methods.TextDocumentCodeActionName;
+
+    private readonly ICodeActionsService _codeActionsService = codeActionsService;
+    private readonly IDelegatedCodeActionsProvider _delegatedCodeActionProvider = delegatedCodeActionProvider;
+    private readonly ITelemetryReporter _telemetryReporter = telemetryReporter;
+
+    private bool _supportsCodeActionResolve = false;
+
+    public bool MutatesSolutionState { get; } = false;
+
+    public void ApplyCapabilities(VSInternalServerCapabilities serverCapabilities, VSInternalClientCapabilities clientCapabilities)
     {
-        private readonly RazorDocumentMappingService _documentMappingService;
-        private readonly IEnumerable<RazorCodeActionProvider> _razorCodeActionProviders;
-        private readonly IEnumerable<CSharpCodeActionProvider> _csharpCodeActionProviders;
-        private readonly DocumentContextFactory _documentContextFactory;
-        private readonly LanguageServerFeatureOptions _languageServerFeatureOptions;
-        private readonly ClientNotifierServiceBase _languageServer;
+        _supportsCodeActionResolve = clientCapabilities.TextDocument?.CodeAction?.ResolveSupport is not null;
 
-        internal bool _supportsCodeActionResolve = false;
+        serverCapabilities.EnableCodeActions();
+    }
 
-        private readonly ImmutableHashSet<string> _allAvailableCodeActionNames;
+    public TextDocumentIdentifier GetTextDocumentIdentifier(VSCodeActionParams request)
+    {
+        return request.TextDocument;
+    }
 
-        public CodeActionEndpoint(
-            RazorDocumentMappingService documentMappingService,
-            IEnumerable<RazorCodeActionProvider> razorCodeActionProviders,
-            IEnumerable<CSharpCodeActionProvider> csharpCodeActionProviders,
-            DocumentContextFactory documentContextFactory,
-            ClientNotifierServiceBase languageServer,
-            LanguageServerFeatureOptions languageServerFeatureOptions)
+    public async Task<SumType<Command, CodeAction>[]?> HandleRequestAsync(VSCodeActionParams request, RazorRequestContext requestContext, CancellationToken cancellationToken)
+    {
+        var documentContext = requestContext.DocumentContext;
+        if (documentContext is null)
         {
-            _documentMappingService = documentMappingService ?? throw new ArgumentNullException(nameof(documentMappingService));
-            _razorCodeActionProviders = razorCodeActionProviders ?? throw new ArgumentNullException(nameof(razorCodeActionProviders));
-            _csharpCodeActionProviders = csharpCodeActionProviders ?? throw new ArgumentNullException(nameof(csharpCodeActionProviders));
-            _documentContextFactory = documentContextFactory ?? throw new ArgumentNullException(nameof(documentContextFactory));
-            _languageServer = languageServer ?? throw new ArgumentNullException(nameof(languageServer));
-            _languageServerFeatureOptions = languageServerFeatureOptions ?? throw new ArgumentNullException(nameof(languageServerFeatureOptions));
-
-            _allAvailableCodeActionNames = GetAllAvailableCodeActionNames();
-        }
-        public async Task<SumType<Command, CodeAction>[]?> Handle(CodeActionParamsBridge request, CancellationToken cancellationToken)
-        {
-            if (request is null)
-            {
-                throw new ArgumentNullException(nameof(request));
-            }
-
-            var razorCodeActionContext = await GenerateRazorCodeActionContextAsync(request, cancellationToken).ConfigureAwait(false);
-            if (razorCodeActionContext is null)
-            {
-                return null;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var razorCodeActions = await GetRazorCodeActionsAsync(razorCodeActionContext, cancellationToken).ConfigureAwait(false);
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var csharpCodeActions = await GetCSharpCodeActionsAsync(razorCodeActionContext, cancellationToken).ConfigureAwait(false);
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var codeActions = Enumerable.Concat(
-                razorCodeActions ?? Array.Empty<RazorVSInternalCodeAction>(),
-                csharpCodeActions ?? Array.Empty<RazorVSInternalCodeAction>());
-
-            if (!codeActions.Any())
-            {
-                return null;
-            }
-
-            // We must cast the RazorCodeAction into a platform compliant code action
-            // For VS (SupportsCodeActionResolve = true) this means just encapsulating the RazorCodeAction in the `CommandOrCodeAction` struct
-            // For VS Code (SupportsCodeActionResolve = false) we must convert it into a CodeAction or Command before encapsulating in the `CommandOrCodeAction` struct.
-            var commandsOrCodeActions = codeActions.Select(c =>
-                _supportsCodeActionResolve ? c : c.AsVSCodeCommandOrCodeAction());
-
-            return commandsOrCodeActions.ToArray();
+            return null;
         }
 
-        public RegistrationExtensionResult? GetRegistration(VSInternalClientCapabilities clientCapabilities)
+        CodeActionsService.AdjustRequestRangeIfNecessary(request);
+
+        var correlationId = Guid.NewGuid();
+        using var __ = _telemetryReporter.TrackLspRequest(LspEndpointName, LanguageServerConstants.RazorLanguageServerName, TelemetryThresholds.CodeActionRazorTelemetryThreshold, correlationId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var codeDocument = await documentContext.GetCodeDocumentAsync(cancellationToken).ConfigureAwait(false);
+        if (!codeDocument.Source.Text.TryGetAbsoluteIndex(request.Range.Start, out var absoluteIndex))
         {
-            _supportsCodeActionResolve = clientCapabilities.TextDocument?.CodeAction?.ResolveSupport != null;
-
-            const string ServerCapability = "codeActionProvider";
-
-            var options = new CodeActionOptions
-            {
-                CodeActionKinds = new[] {
-                    CodeActionKind.RefactorExtract,
-                    CodeActionKind.QuickFix,
-                    CodeActionKind.Refactor
-                },
-                ResolveProvider = true,
-            };
-            return new RegistrationExtensionResult(ServerCapability, options);
+            return null;
         }
 
-        // internal for testing
-        internal async Task<RazorCodeActionContext?> GenerateRazorCodeActionContextAsync(CodeActionParamsBridge request, CancellationToken cancellationToken)
+        var languageKind = codeDocument.GetLanguageKind(absoluteIndex, rightAssociative: false);
+        var documentSnapshot = documentContext.Snapshot;
+
+        var delegatedCodeActions = languageKind switch
         {
-            var documentContext = await _documentContextFactory.TryCreateAsync(request.TextDocument.Uri, cancellationToken).ConfigureAwait(false);
-            if(documentContext is null)
-            {
-                return null;
-            }
+            RazorLanguageKind.Html => await GetHtmlCodeActionsAsync(documentSnapshot, request, correlationId, cancellationToken).ConfigureAwait(false),
+            RazorLanguageKind.CSharp => await GetCSharpCodeActionsAsync(documentSnapshot, request, correlationId, cancellationToken).ConfigureAwait(false),
+            _ => []
+        };
 
-            var documentSnapshot = documentContext.Snapshot;
+        return await _codeActionsService.GetCodeActionsAsync(
+            request,
+            documentSnapshot,
+            delegatedCodeActions,
+            delegatedDocumentUri: null, // We don't use delegatedDocumentUri in the LSP server, as we can trivially recalculate it
+            _supportsCodeActionResolve,
+            cancellationToken).ConfigureAwait(false);
+    }
 
-            var codeDocument = await documentSnapshot.GetGeneratedOutputAsync().ConfigureAwait(false);
-            if (codeDocument.IsUnsupported())
-            {
-                return null;
-            }
+    private async Task<RazorVSInternalCodeAction[]> GetHtmlCodeActionsAsync(IDocumentSnapshot documentSnapshot, VSCodeActionParams request, Guid correlationId, CancellationToken cancellationToken)
+    {
+        var htmlCodeActions = await _delegatedCodeActionProvider.GetDelegatedCodeActionsAsync(RazorLanguageKind.Html, request, documentSnapshot.Version, correlationId, cancellationToken).ConfigureAwait(false);
+        return htmlCodeActions ?? [];
+    }
 
-            var sourceText = await documentSnapshot.GetTextAsync().ConfigureAwait(false);
-
-            // VS Provides `CodeActionParams.Context.SelectionRange` in addition to
-            // `CodeActionParams.Range`. The `SelectionRange` is relative to where the
-            // code action was invoked (ex. line 14, char 3) whereas the `Range` is
-            // always at the start of the line (ex. line 14, char 0). We want to utilize
-            // the relative positioning to ensure we provide code actions for the appropriate
-            // context.
-            //
-            // Note: VS Code doesn't provide a `SelectionRange`.
-            var vsCodeActionContext = (VSInternalCodeActionContext)request.Context;
-            if (vsCodeActionContext.SelectionRange != null)
-            {
-                request.Range = vsCodeActionContext.SelectionRange;
-            }
-
-            var linePosition = new LinePosition(
-                request.Range.Start.Line,
-                request.Range.Start.Character);
-            var hostDocumentIndex = sourceText.Lines.GetPosition(linePosition);
-            var location = new SourceLocation(
-                hostDocumentIndex,
-                request.Range.Start.Line,
-                request.Range.Start.Character);
-
-            var context = new RazorCodeActionContext(
-                request,
-                documentSnapshot,
-                codeDocument,
-                location,
-                sourceText,
-                _languageServerFeatureOptions.SupportsFileManipulation,
-                _supportsCodeActionResolve);
-
-            return context;
+    private async Task<RazorVSInternalCodeAction[]> GetCSharpCodeActionsAsync(IDocumentSnapshot documentSnapshot, VSCodeActionParams request, Guid correlationId, CancellationToken cancellationToken)
+    {
+        var csharpRequest = await _codeActionsService.GetCSharpCodeActionsRequestAsync(documentSnapshot, request, cancellationToken).ConfigureAwait(false);
+        if (csharpRequest is null)
+        {
+            return [];
         }
 
-        private async Task<IEnumerable<RazorVSInternalCodeAction>?> GetCSharpCodeActionsAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-        {
-            var csharpCodeActions = await GetCSharpCodeActionsFromLanguageServerAsync(context, cancellationToken);
-            if (csharpCodeActions is null || !csharpCodeActions.Any())
-            {
-                return null;
-            }
+        var csharpCodeActions = await _delegatedCodeActionProvider.GetDelegatedCodeActionsAsync(RazorLanguageKind.CSharp, csharpRequest, documentSnapshot.Version, correlationId, cancellationToken).ConfigureAwait(false);
+        return csharpCodeActions ?? [];
+    }
 
-            var csharpNamedCodeActions = ExtractCSharpCodeActionNamesFromData(csharpCodeActions);
-            var filteredCSharpCodeActions = await FilterCSharpCodeActionsAsync(context, csharpNamedCodeActions, cancellationToken);
-            return filteredCSharpCodeActions;
+    internal TestAccessor GetTestAccessor() => new(this);
+
+    internal readonly struct TestAccessor(CodeActionEndpoint instance)
+    {
+        public void SetSupportsCodeActionResolve(bool value)
+        {
+            instance._supportsCodeActionResolve = value;
         }
 
-        private IEnumerable<RazorVSInternalCodeAction> ExtractCSharpCodeActionNamesFromData(IEnumerable<RazorVSInternalCodeAction> codeActions)
-        {
-            return codeActions.Where(codeAction =>
-            {
-                // Note: we may see a perf benefit from using a JsonConverter
-                var tags = ((JToken?)codeAction.Data)?["CustomTags"]?.ToObject<string[]>(); ;
-                if (tags is null || tags.Length == 0)
-                {
-                    return false;
-                }
-
-                foreach (var tag in tags)
-                {
-                    if (_allAvailableCodeActionNames.Contains(tag))
-                    {
-                        codeAction.Name = tag;
-                        break;
-                    }
-                }
-
-                if (string.IsNullOrEmpty(codeAction.Name))
-                {
-                    return false;
-                }
-
-                return true;
-            }).ToArray();
-        }
-
-        private async Task<IEnumerable<RazorVSInternalCodeAction>?> FilterCSharpCodeActionsAsync(
-            RazorCodeActionContext context,
-            IEnumerable<RazorVSInternalCodeAction> codeActions,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var tasks = new List<Task<IReadOnlyList<RazorVSInternalCodeAction>?>>();
-
-            foreach (var provider in _csharpCodeActionProviders)
-            {
-                var result = provider.ProvideAsync(context, codeActions, cancellationToken);
-                if (result != null)
-                {
-                    tasks.Add(result);
-                }
-            }
-
-            return await ConsolidateCodeActionsFromProvidersAsync(tasks, cancellationToken);
-        }
-
-        // Internal for testing
-        internal async Task<IEnumerable<RazorVSInternalCodeAction>> GetCSharpCodeActionsFromLanguageServerAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-        {
-            if (!_documentMappingService.TryMapToProjectedDocumentRange(
-                    context.CodeDocument,
-                    context.Request.Range,
-                    out var projectedRange))
-            {
-                return Array.Empty<RazorVSInternalCodeAction>();
-            }
-
-            var newContext = context.Request.Context;
-            if (context.Request.Context is VSInternalCodeActionContext omniSharpContext &&
-                omniSharpContext.SelectionRange is not null &&
-                _documentMappingService.TryMapToProjectedDocumentRange(
-                    context.CodeDocument,
-                    omniSharpContext.SelectionRange,
-                    out var selectionRange))
-            {
-                omniSharpContext.SelectionRange = selectionRange;
-                newContext = omniSharpContext;
-            }
-
-            context.Request.Range = projectedRange;
-            context.Request.Context = newContext;
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var response = await _languageServer.SendRequestAsync(RazorLanguageServerCustomMessageTargets.RazorProvideCodeActionsEndpoint, context.Request);
-            return await response.Returning<RazorVSInternalCodeAction[]>(cancellationToken);
-        }
-
-        private async Task<IEnumerable<RazorVSInternalCodeAction>?> GetRazorCodeActionsAsync(RazorCodeActionContext context, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var tasks = new List<Task<IReadOnlyList<RazorVSInternalCodeAction>?>>();
-
-            foreach (var provider in _razorCodeActionProviders)
-            {
-                var result = provider.ProvideAsync(context, cancellationToken);
-                if (result != null)
-                {
-                    tasks.Add(result);
-                }
-            }
-
-            return await ConsolidateCodeActionsFromProvidersAsync(tasks, cancellationToken);
-        }
-
-        private static async Task<IEnumerable<RazorVSInternalCodeAction>?> ConsolidateCodeActionsFromProvidersAsync(
-            List<Task<IReadOnlyList<RazorVSInternalCodeAction>?>> tasks,
-            CancellationToken cancellationToken)
-        {
-            var results = await Task.WhenAll(tasks).ConfigureAwait(false);
-            var codeActions = new List<RazorVSInternalCodeAction>();
-
-            cancellationToken.ThrowIfCancellationRequested();
-
-            for (var i = 0; i < results.Length; i++)
-            {
-                var result = results[i];
-
-                if (result is not null)
-                {
-                    codeActions.AddRange(result);
-                }
-            }
-
-            return codeActions;
-        }
-
-        private static ImmutableHashSet<string> GetAllAvailableCodeActionNames()
-        {
-            var availableCodeActionNames = new HashSet<string>();
-
-            var refactoringProviderNames = typeof(RazorPredefinedCodeRefactoringProviderNames)
-                .GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Static | BindingFlags.Public)
-                .Where(property => property.PropertyType == typeof(string))
-                .Select(property => property.GetValue(null) as string)
-                .WithoutNull();
-            var codeFixProviderNames = typeof(RazorPredefinedCodeFixProviderNames)
-                .GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Static | BindingFlags.Public)
-                .Where(property => property.PropertyType == typeof(string))
-                .Select(property => property.GetValue(null) as string)
-                .WithoutNull();
-
-            availableCodeActionNames.UnionWith(refactoringProviderNames);
-            availableCodeActionNames.UnionWith(codeFixProviderNames);
-            availableCodeActionNames.Add(LanguageServerConstants.CodeActions.CodeActionFromVSCode);
-
-            return availableCodeActionNames.ToImmutableHashSet();
-        }
+        public Task<RazorVSInternalCodeAction[]> GetCSharpCodeActionsAsync(IDocumentSnapshot documentSnapshot, VSCodeActionParams request, Guid correlationId, CancellationToken cancellationToken)
+            => instance.GetCSharpCodeActionsAsync(documentSnapshot, request, correlationId, cancellationToken);
     }
 }

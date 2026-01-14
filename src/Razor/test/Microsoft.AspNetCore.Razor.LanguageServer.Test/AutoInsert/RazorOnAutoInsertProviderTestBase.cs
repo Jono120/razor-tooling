@@ -1,76 +1,73 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
-using System.Collections.Generic;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.LanguageServer.Extensions;
-using Microsoft.AspNetCore.Razor.LanguageServer.Formatting;
-using Microsoft.AspNetCore.Razor.LanguageServer.Test;
-using Microsoft.AspNetCore.Razor.Test.Common;
-using Microsoft.CodeAnalysis.Razor.ProjectSystem;
-using Microsoft.CodeAnalysis.Razor.Workspaces.Extensions;
+using Microsoft.AspNetCore.Razor.Test.Common.LanguageServer;
+using Microsoft.CodeAnalysis.Razor.AutoInsert;
 using Microsoft.CodeAnalysis.Testing;
 using Microsoft.CodeAnalysis.Text;
-using Microsoft.VisualStudio.LanguageServer.Protocol;
-using Moq;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.AutoInsert
+namespace Microsoft.AspNetCore.Razor.LanguageServer.AutoInsert;
+
+public abstract class RazorOnAutoInsertProviderTestBase(ITestOutputHelper testOutput) : LanguageServerTestBase(testOutput)
 {
-    public abstract class RazorOnAutoInsertProviderTestBase : LanguageServerTestBase
+    private protected abstract IOnAutoInsertProvider CreateProvider();
+
+    protected void RunAutoInsertTest(
+        string input,
+        string expected,
+        bool enableAutoClosingTags = true,
+        RazorFileKind? fileKind = null,
+        TagHelperCollection? tagHelpers = null)
     {
-        internal abstract RazorOnAutoInsertProvider CreateProvider();
+        // Arrange
+        TestFileMarkupParser.GetPosition(input, out input, out var location);
 
-        protected void RunAutoInsertTest(string input, string expected, int tabSize = 4, bool insertSpaces = true, string fileKind = default, IReadOnlyList<TagHelperDescriptor> tagHelpers = default)
+        var source = SourceText.From(input);
+        var position = source.GetPosition(location);
+
+        var path = "file:///path/to/document.razor";
+        var uri = new Uri(path);
+        var codeDocument = CreateCodeDocument(source, uri.AbsolutePath, tagHelpers, fileKind);
+
+        var provider = CreateProvider();
+
+        // Act
+        provider.TryResolveInsertion(position, codeDocument, enableAutoClosingTags: enableAutoClosingTags, out var edit);
+
+        // Assert
+        var edited = edit is null ? source : ApplyEdit(source, edit.TextEdit);
+        var actual = edited.ToString();
+        Assert.Equal(expected, actual);
+    }
+
+    private static SourceText ApplyEdit(SourceText source, TextEdit edit)
+    {
+        var change = source.GetTextChange(edit);
+        return source.WithChanges(change);
+    }
+
+    private static RazorCodeDocument CreateCodeDocument(
+        SourceText text,
+        string path,
+        TagHelperCollection? tagHelpers,
+        RazorFileKind? fileKind = null)
+    {
+        var fileKindValue = fileKind ?? RazorFileKind.Component;
+        tagHelpers ??= [];
+
+        var sourceDocument = RazorSourceDocument.Create(text, RazorSourceDocumentProperties.Create(path, path));
+        var projectEngine = RazorProjectEngine.Create(builder =>
         {
-            // Arrange
-            TestFileMarkupParser.GetPosition(input, out input, out var location);
-
-            var source = SourceText.From(input);
-            source.GetLineAndOffset(location, out var line, out var column);
-            var position = new Position(line, column);
-
-            var path = "file:///path/to/document.razor";
-            var uri = new Uri(path);
-            var codeDocument = CreateCodeDocument(source, uri.AbsolutePath, tagHelpers, fileKind: fileKind);
-            var options = new FormattingOptions()
+            builder.ConfigureParserOptions(builder =>
             {
-                TabSize = tabSize,
-                InsertSpaces = insertSpaces,
-            };
+                builder.UseRoslynTokenizer = true;
+            });
+        });
 
-            var provider = CreateProvider();
-            var context = FormattingContext.Create(uri, Mock.Of<DocumentSnapshot>(MockBehavior.Strict), codeDocument, options, TestAdhocWorkspaceFactory.Instance);
-
-            // Act
-            if (!provider.TryResolveInsertion(position, context, out var edit, out _))
-            {
-                edit = null;
-            }
-
-            // Assert
-            var edited = edit is null ? source : ApplyEdit(source, edit);
-            var actual = edited.ToString();
-            Assert.Equal(expected, actual);
-        }
-
-        private static SourceText ApplyEdit(SourceText source, TextEdit edit)
-        {
-            var change = edit.AsTextChange(source);
-            return source.WithChanges(change);
-        }
-
-        private static RazorCodeDocument CreateCodeDocument(SourceText text, string path, IReadOnlyList<TagHelperDescriptor> tagHelpers = null, string fileKind = default)
-        {
-            fileKind ??= FileKinds.Component;
-            tagHelpers ??= Array.Empty<TagHelperDescriptor>();
-            var sourceDocument = text.GetRazorSourceDocument(path, path);
-            var projectEngine = RazorProjectEngine.Create(builder => { });
-            var codeDocument = projectEngine.ProcessDesignTime(sourceDocument, fileKind, Array.Empty<RazorSourceDocument>(), tagHelpers);
-            return codeDocument;
-        }
+        return projectEngine.Process(sourceDocument, fileKindValue, importSources: default, tagHelpers);
     }
 }

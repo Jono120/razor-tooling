@@ -1,32 +1,38 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 #nullable disable
 
+using System.Threading;
+using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
 using Microsoft.CodeAnalysis.Razor.ProjectSystem;
 
-namespace Microsoft.AspNetCore.Razor.Microbenchmarks
+namespace Microsoft.AspNetCore.Razor.Microbenchmarks;
+
+public class ProjectLoadBenchmark : ProjectSnapshotManagerBenchmarkBase
 {
-    public class ProjectLoadBenchmark : ProjectSnapshotManagerBenchmarkBase
+    [IterationSetup]
+    public void Setup()
     {
-        [IterationSetup]
-        public void Setup()
-        {
-            SnapshotManager = CreateProjectSnapshotManager();
-        }
+        ProjectManager = CreateProjectSnapshotManager();
+    }
 
-        private DefaultProjectSnapshotManager SnapshotManager { get; set; }
+    private ProjectSnapshotManager ProjectManager { get; set; }
 
-        [Benchmark(Description = "Initializes a project and 100 files", OperationsPerInvoke = 100)]
-        public void ProjectLoad_AddProjectAnd100Files()
-        {
-            SnapshotManager.ProjectAdded(HostProject);
-
-            for (var i= 0; i < Documents.Length; i++)
+    [Benchmark(Description = "Initializes a project and 100 files", OperationsPerInvoke = 100)]
+    public async Task ProjectLoad_AddProjectAnd100Files()
+    {
+        await ProjectManager.UpdateAsync(
+            updater =>
             {
-                SnapshotManager.DocumentAdded(HostProject, Documents[i], TextLoaders[i % 4]);
-            }
-        }
+                updater.AddProject(HostProject);
+
+                for (var i = 0; i < Documents.Length; i++)
+                {
+                    updater.AddDocument(HostProject.Key, Documents[i], TextLoaders[i % 4]);
+                }
+            },
+            CancellationToken.None);
     }
 }

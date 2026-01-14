@@ -1,396 +1,316 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
-
-#nullable disable
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Text;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.CodeAnalysis.Razor.Serialization;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
+using Microsoft.AspNetCore.Razor.Test.Common;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace Microsoft.VisualStudio.LanguageServices.Razor
+namespace Microsoft.AspNetCore.Razor.Serialization.Json;
+
+public class TagHelperDescriptorSerializationTest(ITestOutputHelper testOutput) : ToolingTestBase(testOutput)
 {
-    public class TagHelperDescriptorSerializationTest
+    [Fact]
+    public void TagHelperDescriptor_DefaultBlazorServerProject_RoundTrips()
     {
-        [Fact]
-        public void TagHelperDescriptor_DefaultBlazorServerProject_RoundTrips()
+        // Arrange
+        var expectedTagHelpers = RazorTestResources.BlazorServerAppTagHelpers;
+
+        // Act
+
+        using var writeStream = new MemoryStream();
+
+        // Serialize the tag helpers to a stream
+        using (var writer = new StreamWriter(writeStream, Encoding.UTF8, bufferSize: 4096, leaveOpen: true))
         {
-            // Arrange
-            var testFileName = "test.taghelpers.json";
-            var current = new DirectoryInfo(AppContext.BaseDirectory);
-            while (current != null && !File.Exists(Path.Combine(current.FullName, testFileName)))
+            JsonDataConvert.Serialize(expectedTagHelpers, writer);
+        }
+
+        // Deserialize the tag helpers from the stream we just serialized to.
+        writeStream.Seek(0, SeekOrigin.Begin);
+
+        ImmutableArray<TagHelperDescriptor> actualTagHelpers;
+
+        using (var reader = new StreamReader(writeStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true))
+        {
+            actualTagHelpers = JsonDataConvert.DeserializeTagHelperArray(reader);
+        }
+
+        // Assert
+        Assert.Equal<TagHelperDescriptor>(expectedTagHelpers, actualTagHelpers);
+    }
+
+    [Fact]
+    public void TagHelperDescriptor_RoundTripsProperly()
+    {
+        // Arrange
+        var expectedDescriptor = CreateTagHelperDescriptor(
+            kind: TagHelperKind.ITagHelper,
+            tagName: "tag-name",
+            typeName: "type name",
+            assemblyName: "assembly name",
+            attributes:
+            [
+                builder => builder
+                    .Name("test-attribute")
+                    .PropertyName("TestAttribute")
+                    .TypeName("string"),
+            ],
+            ruleBuilders:
+            [
+                builder => builder
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-one", RequiredAttributeNameComparison.PrefixMatch))
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-two", RequiredAttributeNameComparison.FullMatch)
+                        .Value("something", RequiredAttributeValueComparison.PrefixMatch))
+                    .RequireParentTag("parent-name")
+                    .RequireTagStructure(TagStructure.WithoutEndTag),
+            ],
+            configureAction: builder =>
             {
-                current = current.Parent;
-            }
+                builder.AllowChildTag("allowed-child-one");
+            });
 
-            var tagHelperFilePath = Path.Combine(current.FullName, testFileName);
-            var buffer = File.ReadAllBytes(tagHelperFilePath);
-            var serializer = new JsonSerializer();
-            serializer.Converters.Add(new TagHelperDescriptorJsonConverter());
-            IReadOnlyList<TagHelperDescriptor> deserializedTagHelpers;
+        // Act
+        var json = JsonDataConvert.Serialize(expectedDescriptor);
+        var descriptor = JsonDataConvert.DeserializeTagHelper(json);
 
-            // Act
-            using (var stream = new MemoryStream(buffer))
-            using (var reader = new JsonTextReader(new StreamReader(stream)))
+        // Assert
+        Assert.Equal(expectedDescriptor, descriptor);
+    }
+
+    [Fact]
+    public void ViewComponentTagHelperDescriptor_RoundTripsProperly()
+    {
+        // Arrange
+        var expectedDescriptor = CreateTagHelperDescriptor(
+            kind: TagHelperKind.ViewComponent,
+            tagName: "tag-name",
+            typeName: "type name",
+            assemblyName: "assembly name",
+            attributes:
+            [
+                builder => builder
+                    .Name("test-attribute")
+                    .PropertyName("TestAttribute")
+                    .TypeName("string"),
+            ],
+            ruleBuilders:
+            [
+                builder => builder
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-one", RequiredAttributeNameComparison.PrefixMatch))
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-two", RequiredAttributeNameComparison.FullMatch)
+                        .Value("something", RequiredAttributeValueComparison.PrefixMatch))
+                    .RequireParentTag("parent-name")
+                    .RequireTagStructure(TagStructure.WithoutEndTag),
+            ],
+            configureAction: builder =>
             {
-                deserializedTagHelpers = serializer.Deserialize<IReadOnlyList<TagHelperDescriptor>>(reader);
-            }
+                builder.AllowChildTag("allowed-child-one");
+            });
 
-            MemoryStream serializedStream;
-            using (serializedStream = new MemoryStream())
-            using (var writer = new StreamWriter(serializedStream, Encoding.UTF8, bufferSize: 4096))
-            {
-                serializer.Serialize(writer, deserializedTagHelpers);
-            }
+        // Act
+        var json = JsonDataConvert.Serialize(expectedDescriptor);
+        var descriptor = JsonDataConvert.DeserializeTagHelper(json);
 
-            IReadOnlyList<TagHelperDescriptor> reDeserializedTagHelpers;
-            var reserializedStream = new MemoryStream(serializedStream.GetBuffer());
-            using (reserializedStream)
-            using (var reader = new JsonTextReader(new StreamReader(reserializedStream)))
-            {
-                reDeserializedTagHelpers = serializer.Deserialize<IReadOnlyList<TagHelperDescriptor>>(reader);
-            }
+        // Assert
+        Assert.Equal(expectedDescriptor, descriptor);
+    }
 
-            // Assert
-            Assert.Equal(deserializedTagHelpers, reDeserializedTagHelpers);
-        }
+    [Fact]
+    public void TagHelperDescriptor_WithDiagnostic_RoundTripsProperly()
+    {
+        // Arrange
+        var expectedDescriptor = CreateTagHelperDescriptor(
+            kind: TagHelperKind.ITagHelper,
+            tagName: "tag-name",
+            typeName: "type name",
+            assemblyName: "assembly name",
+            attributes:
+            [
+                builder => builder
+                    .Name("test-attribute")
+                    .PropertyName("TestAttribute")
+                    .TypeName("string"),
+            ],
+            ruleBuilders:
+            [
+                builder => builder
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-one", RequiredAttributeNameComparison.PrefixMatch))
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-two", RequiredAttributeNameComparison.FullMatch)
+                        .Value("something", RequiredAttributeValueComparison.PrefixMatch))
+                    .RequireParentTag("parent-name"),
+            ],
+            configureAction: builder => builder
+                .AllowChildTag("allowed-child-one")
+                .AddDiagnostic(RazorDiagnostic.Create(
+                    new RazorDiagnosticDescriptor("id", "Test Message", RazorDiagnosticSeverity.Error), new SourceSpan(null, 10, 20, 30, 40))));
 
-        [Fact]
-        public void TagHelperDescriptor_CanReadCamelCasedData()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: TagHelperConventions.DefaultKind,
-                tagName: "tag-name",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
+        // Act
+        var json = JsonDataConvert.Serialize(expectedDescriptor);
+        var descriptor = JsonDataConvert.DeserializeTagHelper(json);
+
+        // Assert
+        Assert.Equal(expectedDescriptor, descriptor);
+    }
+
+    [Fact]
+    public void TagHelperDescriptor_WithIndexerAttributes_RoundTripsProperly()
+    {
+        // Arrange
+        var expectedDescriptor = CreateTagHelperDescriptor(
+            kind: TagHelperKind.ITagHelper,
+            tagName: "tag-name",
+            typeName: "type name",
+            assemblyName: "assembly name",
+            attributes:
+            [
+                builder => builder
+                    .Name("test-attribute")
+                    .PropertyName("TestAttribute")
+                    .TypeName("SomeEnum")
+                    .AsEnum()
+                    .Documentation("Summary"),
+                builder => builder
+                    .Name("test-attribute2")
+                    .PropertyName("TestAttribute2")
+                    .TypeName("SomeDictionary")
+                    .AsDictionaryAttribute("dict-prefix-", "string"),
+            ],
+            ruleBuilders:
+            [
+                builder => builder
+                    .RequireAttributeDescriptor(attribute => attribute
+                        .Name("required-attribute-one", RequiredAttributeNameComparison.PrefixMatch))
+            ],
+            configureAction: builder => builder
+                .AllowChildTag("allowed-child-one")
+                .TagOutputHint("Hint"));
+
+        // Act
+        var json = JsonDataConvert.Serialize(expectedDescriptor);
+        var descriptor = JsonDataConvert.DeserializeTagHelper(json);
+
+        // Assert
+        Assert.Equal(expectedDescriptor, descriptor);
+    }
+
+    [Fact]
+    public void TagHelperDescriptor_WithoutEditorRequired_RoundTripsProperly()
+    {
+        // Arrange
+        var expectedDescriptor = CreateTagHelperDescriptor(
+            kind: TagHelperKind.ITagHelper,
+            tagName: "tag-name2",
+            typeName: "type name",
+            assemblyName: "assembly name",
+            attributes:
+            [
+                builder =>
                 {
-                    builder => builder
-                        .Name("test-attribute")
-                        .PropertyName("TestAttribute")
-                        .TypeName("string"),
+                    builder
+                    .Name("test-attribute")
+                    .PropertyName("TestAttribute")
+                    .TypeName("string");
                 },
-                ruleBuilders: new Action<TagMatchingRuleDescriptorBuilder>[]
+            ]);
+
+        // Act
+        var json = JsonDataConvert.Serialize(expectedDescriptor);
+        var descriptor = JsonDataConvert.DeserializeTagHelper(json);
+
+        // Assert
+        Assert.NotNull(descriptor);
+        Assert.Equal(expectedDescriptor, descriptor);
+
+        var boundAttribute = Assert.Single(descriptor.BoundAttributes);
+        Assert.False(boundAttribute.IsEditorRequired);
+    }
+
+    [Fact]
+    public void TagHelperDescriptor_WithEditorRequired_RoundTripsProperly()
+    {
+        // Arrange
+        var expectedDescriptor = CreateTagHelperDescriptor(
+            kind: TagHelperKind.ITagHelper,
+            tagName: "tag-name3",
+            typeName: "type name",
+            assemblyName: "assembly name",
+            attributes:
+            [
+                builder =>
                 {
-                    builder => builder
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-one")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.PrefixMatch))
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-two")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.FullMatch)
-                            .Value("something")
-                            .ValueComparisonMode(RequiredAttributeDescriptor.ValueComparisonMode.PrefixMatch))
-                        .RequireParentTag("parent-name")
-                        .RequireTagStructure(TagStructure.WithoutEndTag),
-                },
-                configureAction: builder =>
-                {
-                    builder.AllowChildTag("allowed-child-one");
-                    builder.AddMetadata("foo", "bar");
-                    builder.AddDiagnostic(RazorDiagnostic.Create(
-                        RazorDiagnosticFactory.TagHelper_InvalidTargetedTagNameNullOrWhitespace,
-                        new SourceSpan("Test.razor", 5, 17, 18, 22)));
-                });
-            var serializerSettings = new JsonSerializerSettings()
-            {
-                ContractResolver = new CamelCasePropertyNamesContractResolver(),
-                Converters = new List<JsonConverter>
-                {
-                    TagHelperDescriptorJsonConverter.Instance,
-                    RazorDiagnosticJsonConverter.Instance,
-                },
-            };
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, serializerSettings);
-
-            // Act
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-        }
-
-        [Fact]
-        public void TagHelperDescriptor_RoundTripsProperly()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: TagHelperConventions.DefaultKind,
-                tagName: "tag-name",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .Name("test-attribute")
-                        .PropertyName("TestAttribute")
-                        .TypeName("string"),
-                },
-                ruleBuilders: new Action<TagMatchingRuleDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-one")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.PrefixMatch))
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-two")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.FullMatch)
-                            .Value("something")
-                            .ValueComparisonMode(RequiredAttributeDescriptor.ValueComparisonMode.PrefixMatch))
-                        .RequireParentTag("parent-name")
-                        .RequireTagStructure(TagStructure.WithoutEndTag),
-                },
-                configureAction: builder =>
-                {
-                    builder.AllowChildTag("allowed-child-one");
-                    builder.AddMetadata("foo", "bar");
-                });
-
-            // Act
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-        }
-
-        [Fact]
-        public void ViewComponentTagHelperDescriptor_RoundTripsProperly()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: "MVC.ViewComponent",
-                tagName: "tag-name",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .Name("test-attribute")
-                        .PropertyName("TestAttribute")
-                        .TypeName("string"),
-                },
-                ruleBuilders: new Action<TagMatchingRuleDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-one")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.PrefixMatch))
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-two")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.FullMatch)
-                            .Value("something")
-                            .ValueComparisonMode(RequiredAttributeDescriptor.ValueComparisonMode.PrefixMatch))
-                        .RequireParentTag("parent-name")
-                        .RequireTagStructure(TagStructure.WithoutEndTag),
-                },
-                configureAction: builder =>
-                {
-                    builder.AllowChildTag("allowed-child-one");
-                    builder.AddMetadata("foo", "bar");
-                });
-
-            // Act
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-        }
-
-        [Fact]
-        public void TagHelperDescriptor_WithDiagnostic_RoundTripsProperly()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: TagHelperConventions.DefaultKind,
-                tagName: "tag-name",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .Name("test-attribute")
-                        .PropertyName("TestAttribute")
-                        .TypeName("string"),
-                },
-                ruleBuilders: new Action<TagMatchingRuleDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-one")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.PrefixMatch))
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-two")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.FullMatch)
-                            .Value("something")
-                            .ValueComparisonMode(RequiredAttributeDescriptor.ValueComparisonMode.PrefixMatch))
-                        .RequireParentTag("parent-name"),
-                },
-                configureAction: builder => builder.AllowChildTag("allowed-child-one")
-                        .AddMetadata("foo", "bar")
-                        .AddDiagnostic(RazorDiagnostic.Create(
-                            new RazorDiagnosticDescriptor("id", () => "Test Message", RazorDiagnosticSeverity.Error), new SourceSpan(null, 10, 20, 30, 40))));
-
-            // Act
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-        }
-
-        [Fact]
-        public void TagHelperDescriptor_WithIndexerAttributes_RoundTripsProperly()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: TagHelperConventions.DefaultKind,
-                tagName: "tag-name",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .Name("test-attribute")
-                        .PropertyName("TestAttribute")
-                        .TypeName("SomeEnum")
-                        .AsEnum()
-                        .Documentation("Summary"),
-                    builder => builder
-                        .Name("test-attribute2")
-                        .PropertyName("TestAttribute2")
-                        .TypeName("SomeDictionary")
-                        .AsDictionaryAttribute("dict-prefix-", "string"),
-                },
-                ruleBuilders: new Action<TagMatchingRuleDescriptorBuilder>[]
-                {
-                    builder => builder
-                        .RequireAttributeDescriptor(attribute => attribute
-                            .Name("required-attribute-one")
-                            .NameComparisonMode(RequiredAttributeDescriptor.NameComparisonMode.PrefixMatch))
-                },
-                configureAction: builder => builder
-                        .AllowChildTag("allowed-child-one")
-                        .AddMetadata("foo", "bar")
-                        .TagOutputHint("Hint"));
-
-            // Act
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-        }
-
-        [Fact]
-        public void TagHelperDescriptor_WithoutEditorRequired_RoundTripsProperly()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: TagHelperConventions.DefaultKind,
-                tagName: "tag-name2",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
-                {
-                    builder =>
-                    {
-                        builder
-                        .Name("test-attribute")
-                        .PropertyName("TestAttribute")
-                        .TypeName("string");
-                    },
-                });
-
-            // Act
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-            var boundAttribute = Assert.Single(descriptor.BoundAttributes);
-            Assert.False(boundAttribute.IsEditorRequired);
-        }
-
-        [Fact]
-        public void TagHelperDescriptor_WithEditorRequired_RoundTripsProperly()
-        {
-            // Arrange
-            var expectedDescriptor = CreateTagHelperDescriptor(
-                kind: TagHelperConventions.DefaultKind,
-                tagName: "tag-name3",
-                typeName: "type name",
-                assemblyName: "assembly name",
-                attributes: new Action<BoundAttributeDescriptorBuilder>[]
-                {
-                    builder =>
-                    {
-                        builder
+                    builder
                         .Name("test-attribute")
                         .PropertyName("TestAttribute")
                         .TypeName("string");
 
-                        builder.IsEditorRequired = true;
-                    },
-                });
+                    builder.IsEditorRequired = true;
+                },
+            ]);
 
-            // Act
-            var serializedDescriptor = JsonConvert.SerializeObject(expectedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
-            var descriptor = JsonConvert.DeserializeObject<TagHelperDescriptor>(serializedDescriptor, TagHelperDescriptorJsonConverter.Instance, RazorDiagnosticJsonConverter.Instance);
+        // Act
+        var json = JsonDataConvert.Serialize(expectedDescriptor);
+        var descriptor = JsonDataConvert.DeserializeTagHelper(json);
 
-            // Assert
-            Assert.Equal(expectedDescriptor, descriptor, TagHelperDescriptorComparer.Default);
-            var boundAttribute = Assert.Single(descriptor.BoundAttributes);
-            Assert.True(boundAttribute.IsEditorRequired);
-        }
+        // Assert
+        Assert.NotNull(descriptor);
+        Assert.Equal(expectedDescriptor, descriptor);
 
-        private static TagHelperDescriptor CreateTagHelperDescriptor(
-            string kind,
-            string tagName,
-            string typeName,
-            string assemblyName,
-            IEnumerable<Action<BoundAttributeDescriptorBuilder>> attributes = null,
-            IEnumerable<Action<TagMatchingRuleDescriptorBuilder>> ruleBuilders = null,
-            Action<TagHelperDescriptorBuilder> configureAction = null)
+        var boundAttribute = Assert.Single(descriptor.BoundAttributes);
+        Assert.True(boundAttribute.IsEditorRequired);
+    }
+
+    private static TagHelperDescriptor CreateTagHelperDescriptor(
+        TagHelperKind kind,
+        string tagName,
+        string typeName,
+        string assemblyName,
+        IEnumerable<Action<BoundAttributeDescriptorBuilder>>? attributes = null,
+        IEnumerable<Action<TagMatchingRuleDescriptorBuilder>>? ruleBuilders = null,
+        Action<TagHelperDescriptorBuilder>? configureAction = null)
+    {
+        var builder = TagHelperDescriptorBuilder.CreateTagHelper(kind, typeName, assemblyName);
+        builder.TypeName = typeName;
+
+        if (attributes != null)
         {
-            var builder = TagHelperDescriptorBuilder.Create(kind, typeName, assemblyName);
-            builder.SetTypeName(typeName);
-
-            if (attributes != null)
+            foreach (var attributeBuilder in attributes)
             {
-                foreach (var attributeBuilder in attributes)
-                {
-                    builder.BoundAttributeDescriptor(attributeBuilder);
-                }
+                builder.BoundAttributeDescriptor(attributeBuilder);
             }
-
-            if (ruleBuilders != null)
-            {
-                foreach (var ruleBuilder in ruleBuilders)
-                {
-                    builder.TagMatchingRuleDescriptor(innerRuleBuilder => {
-                        innerRuleBuilder.RequireTagName(tagName);
-                        ruleBuilder(innerRuleBuilder);
-                    });
-                }
-            }
-            else
-            {
-                builder.TagMatchingRuleDescriptor(ruleBuilder => ruleBuilder.RequireTagName(tagName));
-            }
-
-            configureAction?.Invoke(builder);
-
-            var descriptor = builder.Build();
-
-            return descriptor;
         }
+
+        if (ruleBuilders != null)
+        {
+            foreach (var ruleBuilder in ruleBuilders)
+            {
+                builder.TagMatchingRuleDescriptor(innerRuleBuilder =>
+                {
+                    innerRuleBuilder.RequireTagName(tagName);
+                    ruleBuilder(innerRuleBuilder);
+                });
+            }
+        }
+        else
+        {
+            builder.TagMatchingRuleDescriptor(ruleBuilder => ruleBuilder.RequireTagName(tagName));
+        }
+
+        configureAction?.Invoke(builder);
+
+        var descriptor = builder.Build();
+
+        return descriptor;
     }
 }

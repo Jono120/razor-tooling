@@ -1,44 +1,29 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Collections.Generic;
+#if NET
+using System;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Razor.Language;
-using Microsoft.AspNetCore.Razor.LanguageServer.Common;
-using Microsoft.AspNetCore.Razor.LanguageServer.Test;
-using Microsoft.AspNetCore.Razor.LanguageServer.Test.Common;
-using Microsoft.AspNetCore.Razor.Test.Common;
+using Microsoft.AspNetCore.Razor.LanguageServer.Hosting;
+using Microsoft.CodeAnalysis.Razor.Formatting;
+using Microsoft.CodeAnalysis.Razor.Logging;
+using Microsoft.CodeAnalysis.Razor.ProjectSystem;
 
-namespace Microsoft.AspNetCore.Razor.LanguageServer.Formatting
+namespace Microsoft.AspNetCore.Razor.LanguageServer.Formatting;
+
+[Obsolete($"{nameof(TestRazorFormattingService)} is only available on .NET Framework", error: true)]
+internal static class TestRazorFormattingService
 {
-    internal class TestRazorFormattingService
+#pragma warning disable IDE0060 // Remove unused parameter
+
+    public static Task<IRazorFormattingService> CreateWithFullSupportAsync(
+        ILoggerFactory loggerFactory,
+        RazorCodeDocument? codeDocument = null,
+        IDocumentSnapshot? documentSnapshot = null,
+        RazorLSPOptions? razorLSPOptions = null)
     {
-        public static readonly RazorFormattingService Instance = CreateWithFullSupport(TestRazorCodeDocument.CreateEmpty());
-
-        private TestRazorFormattingService()
-        {
-        }
-
-        public static RazorFormattingService CreateWithFullSupport(RazorCodeDocument codeDocument)
-        {
-            var mappingService = new DefaultRazorDocumentMappingService(TestLanguageServerFeatureOptions.Instance, new TestDocumentContextFactory(), TestLoggerFactory.Instance);
-
-            var dispatcher = new LSPProjectSnapshotManagerDispatcher(TestLoggerFactory.Instance);
-            var versionCache = new DefaultDocumentVersionCache(dispatcher);
-
-            var client = new FormattingLanguageServerClient();
-            client.AddCodeDocument(codeDocument);
-
-            var passes = new List<IFormattingPass>()
-            {
-                new HtmlFormattingPass(mappingService, FilePathNormalizer.Instance, client, versionCache, TestLoggerFactory.Instance),
-                new CSharpFormattingPass(mappingService, FilePathNormalizer.Instance, client, TestLoggerFactory.Instance),
-                new CSharpOnTypeFormattingPass(mappingService, FilePathNormalizer.Instance, client, TestLoggerFactory.Instance),
-                new RazorFormattingPass(mappingService, FilePathNormalizer.Instance, client, TestLoggerFactory.Instance),
-                new FormattingDiagnosticValidationPass(mappingService, FilePathNormalizer.Instance, client, TestLoggerFactory.Instance),
-                new FormattingContentValidationPass(mappingService, FilePathNormalizer.Instance, client, TestLoggerFactory.Instance),
-            };
-
-            return new DefaultRazorFormattingService(passes, TestLoggerFactory.Instance, TestAdhocWorkspaceFactory.Instance);
-        }
+        return Task.FromResult<IRazorFormattingService>(null!);
     }
 }
+#endif

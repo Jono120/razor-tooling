@@ -1,12 +1,13 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
-// Licensed under the MIT license. See License.txt in the project root for license information.
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Threading.Tasks;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Microsoft.VisualStudio.Razor.IntegrationTests;
 
-public class OnEnterRulesTests : AbstractRazorEditorTest
+public class OnEnterRulesTests(ITestOutputHelper testOutputHelper) : AbstractRazorEditorTest(testOutputHelper)
 {
     [IdeFact]
     public async Task OnEnterRules_BetweenStartAndEnd()
@@ -117,7 +118,6 @@ A
         // Act
         await TestServices.Editor.PlaceCaretAsync("@onclick='thing'", charsOffset: 1, ControlledHangMitigatingCancellationToken);
         TestServices.Input.Send("{ENTER}");
-
         // Assert
         await TestServices.Editor.VerifyTextContainsAsync(@"
 <button class='someclass' @onclick='thing'
