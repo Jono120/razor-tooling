@@ -83,7 +83,7 @@ internal partial class CSharpFormattingPass
     /// </remarks>
     private sealed class CSharpDocumentGenerator
     {
-        public static CSharpFormattingDocument Generate(RazorCodeDocument codeDocument, SyntaxNode csharpSyntaxRoot, RazorFormattingOptions options, IDocumentMappingService documentMappingService)
+        public static FormattedDocument Generate(RazorCodeDocument codeDocument, SyntaxNode csharpSyntaxRoot, RazorFormattingOptions options, IDocumentMappingService documentMappingService)
         {
             using var _1 = StringBuilderPool.GetPooledObject(out var builder);
             using var _2 = ArrayBuilderPool<LineInfo>.GetPooledObject(out var lineInfoBuilder);
@@ -195,7 +195,7 @@ internal partial class CSharpFormattingPass
                 using var _ = StringBuilderPool.GetPooledObject(out var additionalLinesBuilder);
 
                 var root = _codeDocument.GetRequiredSyntaxRoot();
-                var sourceMappings = _codeDocument.GetRequiredCSharpDocument().SourceMappings;
+                var sourceMappings = _codeDocument.GetRequiredCSharpDocument().SourceMappingsSortedByOriginal;
                 var iMapping = 0;
                 foreach (var line in _sourceText.Lines)
                 {
@@ -727,13 +727,22 @@ internal partial class CSharpFormattingPass
             {
                 if (RazorSyntaxFacts.IsAttributeName(node, out var startTag))
                 {
-                    // If we're just indenting attributes by one level, then we don't need to do anything special here.
-                    var htmlIndentLevel = 1;
+                    int htmlIndentLevel;
                     var additionalIndentation = "";
 
-                    // Otherwise, attributes can be configured to align with the first attribute in their tag.
-                    if (_attributeIndentStyle == AttributeIndentStyle.AlignWithFirst)
+                    if (_attributeIndentStyle == AttributeIndentStyle.IndentByOne)
                     {
+                        // Indent attributes by one level to match child elements.
+                        htmlIndentLevel = 1;
+                    }
+                    else if (_attributeIndentStyle == AttributeIndentStyle.IndentByTwo)
+                    {
+                        // Indent attributes by two levels to differentiate them from child elements.
+                        htmlIndentLevel = 2;
+                    }
+                    else if (_attributeIndentStyle == AttributeIndentStyle.AlignWithFirst)
+                    {
+                        // Align attributes with the first attribute in their tag.
                         var firstAttribute = startTag.Attributes[0];
                         var nameSpan = RazorSyntaxFacts.GetFullAttributeNameSpan(firstAttribute);
 
@@ -742,6 +751,10 @@ internal partial class CSharpFormattingPass
                         // is on, just in case its not on the same line as the start tag.
                         var lineStart = _sourceText.Lines[GetLineNumber(nameSpan)].GetFirstNonWhitespacePosition().GetValueOrDefault();
                         htmlIndentLevel = FormattingUtilities.GetIndentationLevel(nameSpan.Start - lineStart, _tabSize, out additionalIndentation);
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException($"Unknown attribute indentation style '{_attributeIndentStyle}'.");
                     }
 
                     if (ElementContentsShouldNotBeIndented(startTag) &&
@@ -964,14 +977,9 @@ internal partial class CSharpFormattingPass
 
             public override LineInfo VisitRazorDirective(RazorDirectiveSyntax node)
             {
-                // Unfortunately the Razor syntax tree doesn't distinguish different directives with different syntax node types,
+                // Unfortunately the Razor syntax tree doesn't distinguish many different directives with different syntax node types,
                 // so this method is handles way more cases that ideally it would. Sorry! I've split it up into separate methods
                 // so we can pretend, for readability of those methods, if not this one.
-
-                if (node.IsUsingDirective())
-                {
-                    return VisitUsingDirective();
-                }
 
                 if (node.IsAttributeDirective(out var attribute))
                 {
@@ -990,9 +998,7 @@ internal partial class CSharpFormattingPass
                 }
 
                 // All other directives that have braces are handled here
-                if (node.Body is RazorDirectiveBodySyntax body &&
-                    body.CSharpCode is CSharpCodeBlockSyntax code &&
-                    code.Children.TryGetOpenBraceToken(out var brace) &&
+                if (node.DirectiveBody.CSharpCode.Children.TryGetOpenBraceToken(out var brace) &&
                     // If the open brace is on the same line as the directive, then we need to ensure the contents are indented.
                     GetLineNumber(brace) == GetLineNumber(_currentToken))
                 {
@@ -1017,7 +1023,7 @@ internal partial class CSharpFormattingPass
                 return CreateLineInfo(skipNextLineIfBrace: true);
             }
 
-            private LineInfo VisitUsingDirective()
+            public override LineInfo VisitRazorUsingDirective(RazorUsingDirectiveSyntax node)
             {
                 // For @using we just skip over the @ and format as a C# using directive
                 // "@using System" to "using System"
@@ -1124,7 +1130,7 @@ internal partial class CSharpFormattingPass
                     SkipPreviousLine: skipPreviousLine,
                     SkipNextLine: skipNextLine,
                     SkipNextLineIfBrace: skipNextLineIfBrace,
-                    HtmlIndentLevel: htmlIndentLevel,
+                    FixedIndentLevel: htmlIndentLevel,
                     OriginOffset: originOffset,
                     FormattedLength: formattedLength,
                     FormattedOffset: formattedOffset,

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Dependencies>
-  <Source Uri="https://github.com/dotnet/dotnet" Mapping="razor" Sha="5a69737e6f6447fe397d552503a3909ea49f6f34" BarId="293565" />
+  <Source Uri="https://github.com/dotnet/dotnet" Mapping="razor" Sha="e069e8eee8566d7b1aa6f8f34833f8db7a0eb018" BarId="297688" />
   <ProductDependencies>
     <Dependency Name="Roslyn.Diagnostics.Analyzers" Version="5.3.0-2.25630.5">
       <Uri>https://github.com/dotnet/roslyn</Uri>
@@ -62,6 +62,14 @@
       <Uri>https://github.com/dotnet/roslyn</Uri>
       <Sha>635d2b812121ef9fafe0de223b09be64e5a4a291</Sha>
     </Dependency>
+    <Dependency Name="Microsoft.VisualStudio.Extensibility.Testing.Xunit" Version="5.3.0-2.25630.5">
+      <Uri>https://github.com/dotnet/roslyn</Uri>
+      <Sha>635d2b812121ef9fafe0de223b09be64e5a4a291</Sha>
+    </Dependency>
+    <Dependency Name="Microsoft.VisualStudio.Extensibility.Testing.SourceGenerator" Version="5.3.0-2.25630.5">
+      <Uri>https://github.com/dotnet/roslyn</Uri>
+      <Sha>635d2b812121ef9fafe0de223b09be64e5a4a291</Sha>
+    </Dependency>
     <Dependency Name="Microsoft.VisualStudio.LanguageServices" Version="5.3.0-2.25630.5">
       <Uri>https://github.com/dotnet/roslyn</Uri>
       <Sha>635d2b812121ef9fafe0de223b09be64e5a4a291</Sha>
@@ -92,9 +100,9 @@
     </Dependency>
   </ProductDependencies>
   <ToolsetDependencies>
-    <Dependency Name="Microsoft.DotNet.Arcade.Sdk" Version="10.0.0-beta.26062.3">
+    <Dependency Name="Microsoft.DotNet.Arcade.Sdk" Version="10.0.0-beta.26110.1">
       <Uri>https://github.com/dotnet/arcade</Uri>
-      <Sha>9f518f2be968c4c0102c2e3f8c793c5b7f28b731</Sha>
+      <Sha>4bf37ce670528cf2aef4d9b1cd892554b1b02d9d</Sha>
     </Dependency>
     <!-- Necessary for source-build. This allows Microsoft.Extensions.ObjectPool and System.Collections.Immutable packages
          to be retrieved from live source-build and their content consumed by packages produced by razor.

@@ -26,10 +26,12 @@ This file should be imported by eng/Versions.props
     <MicrosoftCodeAnalysisWorkspacesMSBuildPackageVersion>5.3.0-2.25630.5</MicrosoftCodeAnalysisWorkspacesMSBuildPackageVersion>
     <MicrosoftCommonLanguageServerProtocolFrameworkPackageVersion>5.3.0-2.25630.5</MicrosoftCommonLanguageServerProtocolFrameworkPackageVersion>
     <MicrosoftNetCompilersToolsetPackageVersion>5.3.0-2.25630.5</MicrosoftNetCompilersToolsetPackageVersion>
+    <MicrosoftVisualStudioExtensibilityTestingSourceGeneratorPackageVersion>5.3.0-2.25630.5</MicrosoftVisualStudioExtensibilityTestingSourceGeneratorPackageVersion>
+    <MicrosoftVisualStudioExtensibilityTestingXunitPackageVersion>5.3.0-2.25630.5</MicrosoftVisualStudioExtensibilityTestingXunitPackageVersion>
     <MicrosoftVisualStudioLanguageServicesPackageVersion>5.3.0-2.25630.5</MicrosoftVisualStudioLanguageServicesPackageVersion>
     <RoslynDiagnosticsAnalyzersPackageVersion>5.3.0-2.25630.5</RoslynDiagnosticsAnalyzersPackageVersion>
     <!-- dotnet/arcade dependencies -->
-    <MicrosoftDotNetArcadeSdkPackageVersion>10.0.0-beta.26062.3</MicrosoftDotNetArcadeSdkPackageVersion>
+    <MicrosoftDotNetArcadeSdkPackageVersion>10.0.0-beta.26110.1</MicrosoftDotNetArcadeSdkPackageVersion>
     <!-- dotnet/aspnetcore dependencies -->
     <MicrosoftExtensionsObjectPoolPackageVersion>8.0.0</MicrosoftExtensionsObjectPoolPackageVersion>
     <!-- dotnet/runtime dependencies -->
@@ -59,6 +61,8 @@ This file should be imported by eng/Versions.props
     <MicrosoftCodeAnalysisWorkspacesMSBuildVersion>$(MicrosoftCodeAnalysisWorkspacesMSBuildPackageVersion)</MicrosoftCodeAnalysisWorkspacesMSBuildVersion>
     <MicrosoftCommonLanguageServerProtocolFrameworkVersion>$(MicrosoftCommonLanguageServerProtocolFrameworkPackageVersion)</MicrosoftCommonLanguageServerProtocolFrameworkVersion>
     <MicrosoftNetCompilersToolsetVersion>$(MicrosoftNetCompilersToolsetPackageVersion)</MicrosoftNetCompilersToolsetVersion>
+    <MicrosoftVisualStudioExtensibilityTestingSourceGeneratorVersion>$(MicrosoftVisualStudioExtensibilityTestingSourceGeneratorPackageVersion)</MicrosoftVisualStudioExtensibilityTestingSourceGeneratorVersion>
+    <MicrosoftVisualStudioExtensibilityTestingXunitVersion>$(MicrosoftVisualStudioExtensibilityTestingXunitPackageVersion)</MicrosoftVisualStudioExtensibilityTestingXunitVersion>
     <MicrosoftVisualStudioLanguageServicesVersion>$(MicrosoftVisualStudioLanguageServicesPackageVersion)</MicrosoftVisualStudioLanguageServicesVersion>
     <RoslynDiagnosticsAnalyzersVersion>$(RoslynDiagnosticsAnalyzersPackageVersion)</RoslynDiagnosticsAnalyzersVersion>
     <!-- dotnet/arcade dependencies -->
